@@ -77,12 +77,19 @@
   </div>
 
   <div class="auro-editor">
-    <!-- <header [ngClass]="{'collapsed': !showHeader}">
+    <div class="header-toggle-container">
+      <button class="collapse-toggle-btn" (click)="toggleHeader()">
+        <i class="fas" [ngClass]="{'fa-chevron-down': !showHeader, 'fa-chevron-up': showHeader}"></i>
+        Editor Header
+      </button>
+    </div>
+    
+    <header [ngClass]="{'collapsed': !showHeader}">
       <div class="header-title">
         <h2>Auro Editor <span class="version">Text Editor</span></h2>
       </div>
       <div class="header-actions"></div>
-    </header> -->
+    </header>
 
     <div class="main-container">
       <div class="toolbar">
@@ -165,6 +172,34 @@
           <button class="toolbar-btn" [class.active]="currentAlignment === 'justify'" (click)="setAlignment('justify')">
             <i class="fas fa-align-justify"></i>
           </button>
+        </div>
+        
+        <div class="toolbar-group">
+          <div class="border-controls">
+            <span>Border:</span>
+            <div class="checkbox-container">
+              <input type="checkbox" id="showBorder" (change)="toggleBorder($event)">
+              <label for="showBorder">Show</label>
+            </div>
+            <select [value]="currentBorderStyle" (change)="setBorderStyle($event)">
+              <option value="solid">Solid</option>
+              <option value="dotted">Dotted</option>
+              <option value="dashed">Dashed</option>
+              <option value="double">Double</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="toolbar-group">
+          <div class="field-insert">
+            <span>Insert Field:</span>
+            <select (change)="insertField($event)">
+              <option value="">-- Select --</option>
+              <option value="name">Name</option>
+              <option value="age">Age</option>
+              <option value="gender">Gender</option>
+            </select>
+          </div>
         </div>
         
         <div class="toolbar-group">

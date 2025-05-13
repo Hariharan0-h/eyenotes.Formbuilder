@@ -45,7 +45,7 @@
 .auro-editor {
   display: flex;
   flex-direction: column;
-  height: 85vh;
+  height: 87vh;
   font-family: 'Inter', sans-serif;
   color: #333;
   background-color: #f8f9fa;
@@ -281,6 +281,65 @@ header.collapsed {
 .font-select select option {
   padding: 8px;
   font-size: 14px;
+}
+
+/* Border Controls */
+.border-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.border-controls span {
+  font-size: 13px;
+}
+
+.border-controls select {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #ced4da;
+  font-size: 13px;
+}
+
+.checkbox-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.checkbox-container label {
+  font-size: 13px;
+  user-select: none;
+}
+
+/* Field Insert Controls */
+.field-insert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-insert span {
+  font-size: 13px;
+}
+
+.field-insert select {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #ced4da;
+  font-size: 13px;
+  min-width: 100px;
+}
+
+/* Field Placeholder Styling */
+.field-placeholder {
+  background-color: #e9f7fb;
+  padding: 2px 4px;
+  border-radius: 3px;
+  margin: 0 2px;
+  color: #0969da;
+  cursor: default;
+  user-select: none;
 }
 
 /* Canvas Container */
