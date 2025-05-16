@@ -25,7 +25,6 @@
 .form-fields-container {
   padding: 15px;
   border: 1px solid #dee2e6;
-  border-top: none;
   border-radius: 0 0 4px 4px;
   transition: max-height 0.3s ease-out, opacity 0.3s ease-out, padding 0.3s ease-out;
   overflow: hidden;
@@ -248,11 +247,11 @@ header.collapsed {
 
 .color-picker input[type="color"] {
   cursor: pointer;
-  height: 0;
-  width: 0;
+  height: 24px;
+  width: 24px;
   padding: 0;
-  border: none;
-  position: absolute;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
 }
 
 .color-picker span {
@@ -299,6 +298,22 @@ header.collapsed {
   border-radius: 4px;
   border: 1px solid #ced4da;
   font-size: 13px;
+}
+
+.border-controls input[type="number"] {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #ced4da;
+  font-size: 13px;
+  width: 40px;
+}
+
+.border-controls input[type="color"] {
+  height: 24px;
+  width: 24px;
+  padding: 0;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
 }
 
 .checkbox-container {
@@ -378,12 +393,12 @@ header.collapsed {
 
 .page-remove-btn {
   position: absolute;
-  top: -15px;
-  right: -15px;
-  width: 30px;
-  height: 30px;
+  top: -3px;
+  right: -35px;
+  width: 25px;
+  height: 25px;
   border-radius: 50%;
-  background-color: #e74c3c;
+  background-color: #e74d3c8c;
   color: white;
   border: 2px solid white;
   display: flex;
@@ -509,6 +524,7 @@ header.collapsed {
   box-sizing: border-box;
   cursor: text;
   line-height: 1.5;
+  transition: border 0.2s;
 }
 
 /* Empty canvas styling */
@@ -791,6 +807,7 @@ header.collapsed {
   min-width: 50px;
   min-height: 50px;
   z-index: 10;
+  cursor: move;
 }
 
 .img-container.selected {
@@ -827,6 +844,7 @@ header.collapsed {
   min-height: 50px;
   text-align: center;
   z-index: 10;
+  cursor: move;
 }
 
 .line-container.selected {
@@ -860,23 +878,94 @@ header.collapsed {
   min-height: 50px;
 }
 
-/* Resize and Rotation Control Styles */
-.resize-controls {
-  position: fixed; /* Use fixed to make it visible regardless of scrolling */
-  pointer-events: none; /* Allow clicking through the container by default */
-  z-index: 1000; /* Ensure it stays on top */
+/* Table Styles */
+.editor-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  position: relative;
+  cursor: move;
 }
 
-/* Base resize handle styles */
+.editor-table td {
+  border: 1px solid #dee2e6;
+  padding: 8px;
+  position: relative;
+  min-width: 50px;
+  min-height: 20px;
+  transition: all 0.2s;
+}
+
+.editor-table.draggable {
+  cursor: move;
+  user-select: none;
+}
+
+.editor-table.selected {
+  outline: 2px solid #4361ee;
+  outline-offset: 2px;
+}
+
+.editor-table-container {
+  position: relative;
+  margin: 15px 0;
+  display: inline-block;
+}
+
+.table-cell.selected {
+  background-color: rgba(67, 97, 238, 0.1);
+  outline: 2px solid #4361ee;
+  outline-offset: -2px;
+}
+
+/* Table Cell Resize Controls */
+.table-cell-resize-controls {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1001;
+}
+
+.cell-resize-handle {
+  position: absolute;
+  pointer-events: all;
+  background-color: #4361ee;
+  z-index: 1002;
+}
+
+.cell-resize-right {
+  width: 4px;
+  height: 100%;
+  right: -2px;
+  top: 0;
+  cursor: col-resize;
+}
+
+.cell-resize-bottom {
+  width: 100%;
+  height: 4px;
+  bottom: -2px;
+  left: 0;
+  cursor: row-resize;
+}
+
+/* Resize and Rotation Control Styles - IMPROVED */
+.resize-controls {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  box-sizing: border-box;
+}
+
+/* Improved resize handle styles - now stay inside the element */
 .resize-handle {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   background-color: #4361ee;
-  border: 2px solid white;
+  border: 1px solid white;
   border-radius: 50%;
-  pointer-events: all; /* Make handles clickable */
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+  pointer-events: all;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
   z-index: 1005;
   transition: transform 0.15s ease;
 }
@@ -887,84 +976,100 @@ header.collapsed {
   cursor: pointer;
 }
 
-/* Handle positions - with more spacing from edges */
+/* Handle positions - now positioned INSIDE the element boundaries */
 .resize-nw {
-  top: -7px;
-  left: -7px;
+  top: 2px;
+  left: 2px;
   cursor: nw-resize;
 }
 
 .resize-n {
-  top: -7px;
+  top: 2px;
   left: 50%;
   transform: translateX(-50%);
   cursor: n-resize;
 }
 
 .resize-ne {
-  top: -7px;
-  right: -7px;
+  top: 2px;
+  right: 2px;
   cursor: ne-resize;
 }
 
 .resize-e {
-  right: -7px;
+  right: 2px;
   top: 50%;
   transform: translateY(-50%);
   cursor: e-resize;
 }
 
 .resize-se {
-  bottom: -7px;
-  right: -7px;
+  bottom: 2px;
+  right: 2px;
   cursor: se-resize;
 }
 
 .resize-s {
-  bottom: -7px;
+  bottom: 2px;
   left: 50%;
   transform: translateX(-50%);
   cursor: s-resize;
 }
 
 .resize-sw {
-  bottom: -7px;
-  left: -7px;
+  bottom: 2px;
+  left: 2px;
   cursor: sw-resize;
 }
 
 .resize-w {
-  left: -7px;
+  left: 2px;
   top: 50%;
   transform: translateY(-50%);
   cursor: w-resize;
 }
 
-/* Rotate handle with improved styling */
+/* Improved rotate handle */
 .rotate-handle {
   position: absolute;
-  top: -30px;
+  top: -22px; /* Still outside but closer */
   left: 50%;
   transform: translateX(-50%);
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   background-color: #4361ee;
   color: white;
   border-radius: 50%;
-  border: 2px solid white;
+  border: 1px solid white;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: move;
   pointer-events: all;
   z-index: 1005;
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
   transition: background-color 0.2s, transform 0.15s;
 }
 
-.rotate-handle:hover {
-  background-color: #3f37c9;
-  transform: translateX(-50%) scale(1.1);
+/* Special classes for small elements to ensure handles are visible */
+.resize-controls.small-element .resize-handle {
+  /* Increase visibility for small elements */
+  width: 8px;
+  height: 8px;
+  border-width: 1px;
+}
+
+/* Additional visibility helpers for very small elements */
+.resize-controls.tiny-element .resize-n,
+.resize-controls.tiny-element .resize-s {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.resize-controls.tiny-element .resize-e,
+.resize-controls.tiny-element .resize-w {
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 /* Set reasonable margins for paragraphs */
@@ -996,4 +1101,20 @@ header.collapsed {
 @keyframes slideUp {
   from { transform: translateY(20px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+
+.field-width{
+  width: 100%;
+}
+.field-width .form-group{
+  width: 16%;
+}
+.form-control{
+  box-sizing: border-box;
+}
+.field-width .form-group.pos-width{
+  width: 100%;
+}
+.field-width .form-group.pos-width .col{
+  width: 16%;
 }

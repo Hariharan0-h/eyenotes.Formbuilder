@@ -1,13 +1,7 @@
 <form [formGroup]="documentForm" class="form-container">
-  <div class="form-header">
-    <button class="collapse-toggle-btn" (click)="toggleFormFields()">
-      <i class="fas" [ngClass]="{'fa-chevron-down': showFormFields, 'fa-chevron-right': !showFormFields}"></i>
-      Form Fields
-    </button>
-  </div>
   
-  <div class="form-fields-container" [ngClass]="{'collapsed': !showFormFields}">
-    <div class="form-row">
+  <div class="form-fields-container">
+    <div class="form-row field-width">
       <div class="form-group">
         <label for="purpose">Purpose:</label>
         <select id="purpose" class="form-control" formControlName="purpose">
@@ -49,8 +43,11 @@
         <label for="paperSize">Paper size:</label>
         <input type="text" id="paperSize" class="form-control" formControlName="paperSize" placeholder="Enter paper size" />
       </div>
+     
+    </div>
 
-      <div class="form-group">
+    <div class="form-row field-width">
+      <div class="form-group pos-width">
         <label>Margins (in cm):</label>
         <div class="form-row">
           <div class="col">
@@ -61,8 +58,6 @@
             <label for="marginBottom">Bottom:</label>
             <input type="number" id="marginBottom" class="form-control" formControlName="marginBottom" step="0.01" />
           </div>
-        </div>
-        <div class="form-row mt-2">
           <div class="col">
             <label for="marginLeft">Left:</label>
             <input type="number" id="marginLeft" class="form-control" formControlName="marginLeft" step="0.01" />
@@ -77,61 +72,54 @@
   </div>
 
   <div class="auro-editor">
-    <div class="header-toggle-container">
-      <button class="collapse-toggle-btn" (click)="toggleHeader()">
-        <i class="fas" [ngClass]="{'fa-chevron-down': !showHeader, 'fa-chevron-up': showHeader}"></i>
-        Editor Header
-      </button>
-    </div>
-    
-    <header [ngClass]="{'collapsed': !showHeader}">
-      <div class="header-title">
-        <h2>Auro Editor <span class="version">Text Editor</span></h2>
-      </div>
-      <div class="header-actions"></div>
-    </header>
-
     <div class="main-container">
       <div class="toolbar">
+        <!-- Text Formatting -->
         <div class="toolbar-group">
-          <button class="toolbar-btn" [class.active]="isBold" (click)="toggleBold()">
+          <button class="toolbar-btn" [class.active]="isBold" (click)="toggleBold()" title="Bold (Ctrl+B)">
             <i class="fas fa-bold"></i>
           </button>
-          <button class="toolbar-btn" [class.active]="isItalic" (click)="toggleItalic()">
+          <button class="toolbar-btn" [class.active]="isItalic" (click)="toggleItalic()" title="Italic (Ctrl+I)">
             <i class="fas fa-italic"></i>
           </button>
-          <button class="toolbar-btn" [class.active]="isUnderlined" (click)="toggleUnderline()">
+          <button class="toolbar-btn" [class.active]="isUnderlined" (click)="toggleUnderline()" title="Underline (Ctrl+U)">
             <i class="fas fa-underline"></i>
           </button>
         </div>
         
+        <!-- Lists -->
         <div class="toolbar-group">
-          <button class="toolbar-btn" (click)="toggleOrderedList()">
+          <button class="toolbar-btn" (click)="toggleOrderedList()" title="Ordered List">
             <i class="fas fa-list-ol"></i>
           </button>
-          <button class="toolbar-btn" (click)="toggleUnorderedList()">
+          <button class="toolbar-btn" (click)="toggleUnorderedList()" title="Unordered List">
             <i class="fas fa-list-ul"></i>
           </button>
-          <button class="toolbar-btn" (click)="indent()">
+          <button class="toolbar-btn" (click)="indent()" title="Indent (Tab)">
             <i class="fas fa-indent"></i>
           </button>
-          <button class="toolbar-btn" (click)="outdent()">
+          <button class="toolbar-btn" (click)="outdent()" title="Outdent">
             <i class="fas fa-outdent"></i>
           </button>
         </div>
         
+        <!-- Objects -->
         <div class="toolbar-group">
-          <button class="toolbar-btn" (click)="showImageModal = true">
+          <button class="toolbar-btn" (click)="showImageModal = true" title="Insert Image">
             <i class="fas fa-image"></i> Image
           </button>
-          <button class="toolbar-btn" (click)="addHorizontalLine()">
+          <button class="toolbar-btn" (click)="addHorizontalLine()" title="Insert Horizontal Line">
             <i class="fas fa-minus"></i> H-Line
           </button>
-          <button class="toolbar-btn" (click)="addVerticalLine()">
+          <button class="toolbar-btn" (click)="addVerticalLine()" title="Insert Vertical Line">
             <i class="fas fa-grip-lines-vertical"></i> V-Line
+          </button>
+          <button class="toolbar-btn" (click)="showTableModal = true" title="Insert Table">
+            <i class="fas fa-table"></i> Table
           </button>
         </div>
         
+        <!-- Color -->
         <div class="toolbar-group">
           <div class="color-picker">
             <div class="color-display" [style.background-color]="currentColor"></div>
@@ -143,6 +131,7 @@
           </div>
         </div>
         
+        <!-- Font and Size -->
         <div class="toolbar-group">
           <div class="font-select">
             <span>Size</span>
@@ -159,26 +148,28 @@
           </div>
         </div>
         
+        <!-- Alignment -->
         <div class="toolbar-group">
-          <button class="toolbar-btn" [class.active]="currentAlignment === 'left'" (click)="setAlignment('left')">
+          <button class="toolbar-btn" [class.active]="currentAlignment === 'left'" (click)="setAlignment('left')" title="Align Left">
             <i class="fas fa-align-left"></i>
           </button>
-          <button class="toolbar-btn" [class.active]="currentAlignment === 'center'" (click)="setAlignment('center')">
+          <button class="toolbar-btn" [class.active]="currentAlignment === 'center'" (click)="setAlignment('center')" title="Align Center">
             <i class="fas fa-align-center"></i>
           </button>
-          <button class="toolbar-btn" [class.active]="currentAlignment === 'right'" (click)="setAlignment('right')">
+          <button class="toolbar-btn" [class.active]="currentAlignment === 'right'" (click)="setAlignment('right')" title="Align Right">
             <i class="fas fa-align-right"></i>
           </button>
-          <button class="toolbar-btn" [class.active]="currentAlignment === 'justify'" (click)="setAlignment('justify')">
+          <button class="toolbar-btn" [class.active]="currentAlignment === 'justify'" (click)="setAlignment('justify')" title="Justify">
             <i class="fas fa-align-justify"></i>
           </button>
         </div>
         
+        <!-- Page Border -->
         <div class="toolbar-group">
           <div class="border-controls">
-            <span>Border:</span>
+            <span>Page Border:</span>
             <div class="checkbox-container">
-              <input type="checkbox" id="showBorder" (change)="toggleBorder($event)">
+              <input type="checkbox" id="showBorder" [checked]="showBorder" (change)="toggleBorder($event)">
               <label for="showBorder">Show</label>
             </div>
             <select [value]="currentBorderStyle" (change)="setBorderStyle($event)">
@@ -187,9 +178,12 @@
               <option value="dashed">Dashed</option>
               <option value="double">Double</option>
             </select>
+            <input type="number" [value]="currentBorderWidth" (change)="setBorderWidth($event)" min="1" max="5" style="width:40px" title="Border Width">
+            <input type="color" [value]="currentBorderColor" (change)="setBorderColor($event)" title="Border Color">
           </div>
         </div>
         
+        <!-- Field Insertion -->
         <div class="toolbar-group">
           <div class="field-insert">
             <span>Insert Field:</span>
@@ -197,17 +191,29 @@
               <option value="">-- Select --</option>
               <option value="name">Name</option>
               <option value="age">Age</option>
+              <option value="eye">Eye</option>
               <option value="gender">Gender</option>
+              <option value="uin">UIN</option>
+              <option value="diagnosis">Diagnosis</option>
+              <option value="procedure">Procedure</option>
+              <option value="implant">Implant</option>
+              <option value="doctor_name">Doctor Name</option>
+              <option value="mcir_no">MCIR No</option>
+              <option value="date">Date</option>
             </select>
           </div>
         </div>
         
+        <!-- Undo/Redo & Export -->
         <div class="toolbar-group">
           <button class="toolbar-btn" (click)="undo()" title="Undo (Ctrl+Z)">
             <i class="fas fa-undo"></i> Undo
           </button>
           <button class="toolbar-btn" (click)="redo()" title="Redo (Ctrl+Y)">
             <i class="fas fa-redo"></i> Redo
+          </button>
+          <button class="toolbar-btn" (click)="printCanvas()" title="Print (Ctrl+P)">
+            <i class="fas fa-print"></i> Print
           </button>
           <button class="toolbar-btn" (click)="showExportModal = true; updateExportDetails()" title="Export Document">
             <i class="fas fa-file-export"></i> Export
@@ -247,11 +253,11 @@
         </div>
         
         <div class="zoom-controls">
-          <button class="zoom-btn" (click)="adjustZoom(-10)">
+          <button class="zoom-btn" (click)="adjustZoom(-10)" title="Zoom Out">
             <i class="fas fa-minus"></i>
           </button>
           <div class="zoom-level">{{ zoom }}%</div>
-          <button class="zoom-btn" (click)="adjustZoom(10)">
+          <button class="zoom-btn" (click)="adjustZoom(10)" title="Zoom In">
             <i class="fas fa-plus"></i>
           </button>
         </div>
@@ -287,6 +293,79 @@
       </div>
     </div>
     
+    <!-- Image Modal -->
+    <div *ngIf="showImageModal" class="modal">
+      <div class="modal-backdrop" (click)="showImageModal = false"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Upload Image</h3>
+          <button class="close-btn" (click)="showImageModal = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Select an image</label>
+            <div class="file-input-wrapper">
+              <input type="file" accept="image/*" (change)="uploadImage($event)" id="imageUpload">
+              <label for="imageUpload">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <p>Click to browse or drag image here</p>
+              </label>
+            </div>
+          </div>
+          <div class="info-text">
+            <p><i class="fas fa-info-circle"></i> Images can be resized and moved after insertion.</p>
+            <p><i class="fas fa-info-circle"></i> Click on an image to select it, then use the handles to resize or move it.</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn secondary" (click)="showImageModal = false">Cancel</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Table Modal -->
+    <div *ngIf="showTableModal" class="modal">
+      <div class="modal-backdrop" (click)="showTableModal = false"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Insert Table</h3>
+          <button class="close-btn" (click)="showTableModal = false">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="tableRows">Rows:</label>
+            <input type="number" id="tableRows" [(ngModel)]="tableRows" [ngModelOptions]="{standalone: true}" min="1" max="20" class="form-control">
+          </div>
+          <div class="form-group">
+            <label for="tableColumns">Columns:</label>
+            <input type="number" id="tableColumns" [(ngModel)]="tableColumns" [ngModelOptions]="{standalone: true}" min="1" max="10" class="form-control">
+          </div>
+          <div class="form-group">
+            <label for="tableBorderStyle">Border Style:</label>
+            <select id="tableBorderStyle" [(ngModel)]="tableBorderStyle" [ngModelOptions]="{standalone: true}" class="form-control">
+              <option value="solid">Solid</option>
+              <option value="dotted">Dotted</option>
+              <option value="dashed">Dashed</option>
+              <option value="double">Double</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="tableBorderWidth">Border Width (px):</label>
+            <input type="number" id="tableBorderWidth" [(ngModel)]="tableBorderWidth" [ngModelOptions]="{standalone: true}" min="1" max="5" class="form-control">
+          </div>
+          <div class="info-text">
+            <p><i class="fas fa-info-circle"></i> Tables can be moved and resized after insertion.</p>
+            <p><i class="fas fa-info-circle"></i> Click on a table to select it, then use the handles to resize or move it.</p>
+            <p><i class="fas fa-info-circle"></i> Click inside a cell to edit its content or resize it individually.</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn secondary" (click)="showTableModal = false">Cancel</button>
+          <button class="btn primary" (click)="insertTable()">Insert</button>
+        </div>
+      </div>
+    </div>
+    
     <!-- Notification -->
     <div *ngIf="showNotification" class="notification" [ngClass]="notificationType">
       <i *ngIf="notificationType === 'success'" class="fas fa-check-circle"></i>
@@ -296,34 +375,16 @@
     </div>
   </div>
 
-  <!-- Image Modal -->
-  <div *ngIf="showImageModal" class="modal">
-    <div class="modal-backdrop" (click)="showImageModal = false"></div>
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>Upload Image</h3>
-        <button class="close-btn" (click)="showImageModal = false">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label>Select an image</label>
-          <div class="file-input-wrapper">
-            <input type="file" accept="image/*" (change)="uploadImage($event)" id="imageUpload">
-            <label for="imageUpload">
-              <i class="fas fa-cloud-upload-alt"></i>
-              <p>Click to browse or drag image here</p>
-            </label>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn secondary" (click)="showImageModal = false">Cancel</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Resize and Rotate Handles for Selected Objects -->
-  <div *ngIf="selectedObject && selectedObject.element" class="resize-controls">
+  <div *ngIf="selectedObject && selectedObject.element" 
+       class="resize-controls"
+       [ngClass]="{'small-element': selectedObjectIsSmall(), 'tiny-element': selectedObjectIsTiny()}"
+       [style.top]="selectedObject.element.getBoundingClientRect().top + 'px'"
+       [style.left]="selectedObject.element.getBoundingClientRect().left + 'px'"
+       [style.width]="selectedObject.element.getBoundingClientRect().width + 'px'"
+       [style.height]="selectedObject.element.getBoundingClientRect().height + 'px'"
+       [style.transform]="selectedObject.rotation ? 'rotate(' + selectedObject.rotation + 'deg)' : ''"
+       [style.transform-origin]="'center center'">
     <!-- Resize handles -->
     <div class="resize-handle resize-nw" (mousedown)="startResize($event, 'nw')"></div>
     <div class="resize-handle resize-n" (mousedown)="startResize($event, 'n')"></div>
@@ -338,6 +399,16 @@
     <div class="rotate-handle" (mousedown)="startRotate($event)">
       <i class="fas fa-sync-alt fa-xs"></i>
     </div>
+  </div>
+
+  <!-- Table Cell Resize Handles -->
+  <div *ngIf="selectedTableCell" class="table-cell-resize-controls"
+       [style.top]="selectedTableCell.getBoundingClientRect().top + 'px'"
+       [style.left]="selectedTableCell.getBoundingClientRect().left + 'px'"
+       [style.width]="selectedTableCell.getBoundingClientRect().width + 'px'"
+       [style.height]="selectedTableCell.getBoundingClientRect().height + 'px'">
+    <div class="cell-resize-handle cell-resize-right" (mousedown)="startTableCellResize($event, 'right')"></div>
+    <div class="cell-resize-handle cell-resize-bottom" (mousedown)="startTableCellResize($event, 'bottom')"></div>
   </div>
 
   <!-- Save Button at Bottom -->

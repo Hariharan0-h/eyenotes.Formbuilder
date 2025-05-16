@@ -1,12 +1,13 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { Component, OnInit, AfterViewInit, ViewChild, ElementRef, HostListener, Renderer2 } from '@angular/core';
+import { Component, OnInit, AfterViewInit, ViewChild, ElementRef, HostListener, Renderer2, OnDestroy } from '@angular/core';
 import { FormBuilder, FormGroup, FormsModule, Validators } from '@angular/forms';
 import { ReactiveFormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 
 type SupportedLanguage = 'english' | 'tamil' | 'telungu' | 'malayalam' | 'hindi';
 
-export interface EditorObject {
+interface EditorObject {
   id: string;
   type: string;
   x: number;
@@ -18,14 +19,30 @@ export interface EditorObject {
   element?: HTMLElement;
 }
 
-export interface ImageObject extends EditorObject {
+interface ImageObject extends EditorObject {
   src: string;
 }
 
-export interface LineObject extends EditorObject {
+interface LineObject extends EditorObject {
   orientation: 'horizontal' | 'vertical';
   thickness: number;
   color: string;
+}
+
+interface TableObject extends EditorObject {
+  rows: number;
+  columns: number;
+  borderStyle: string;
+  borderWidth: number;
+}
+
+interface EditorPage {
+  id: number;
+  content: string;
+  hasBorder?: boolean;
+  borderStyle?: string;
+  borderWidth?: number;
+  borderColor?: string;
 }
 
 @Component({
@@ -35,14 +52,21 @@ export interface LineObject extends EditorObject {
   templateUrl: './auro-editor.component.html',
   styleUrls: ['./auro-editor.component.css']
 })
-export class AuroEditorComponent implements OnInit, AfterViewInit {
+export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('canvasContent') canvasContent!: ElementRef;
   @ViewChild('colorInput') colorInput!: ElementRef;
+  
+  // Form subscriptions
+  private subscriptions: Subscription[] = [];
   
   // Objects management
   objects: EditorObject[] = [];
   selectedObject: EditorObject | null = null;
   nextId = 1;
+
+  // Minimum dimensions for resizing
+  minResizeWidth = 20;
+  minResizeHeight = 20;
   
   // Dragging state
   isDragging = false;
@@ -65,19 +89,33 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
   rotateStartY = 0;
   rotateStartAngle = 0;
 
+  // Table related properties
+  tableRows = 3;
+  tableColumns = 3;
+  tableBorderStyle = 'solid';
+  tableBorderWidth = 1;
+  selectedTableCell: HTMLTableCellElement | null = null;
+  isTableCellResizing = false;
+  tableCellResizeDirection = '';
+  tableCellResizeStartX = 0;
+  tableCellResizeStartY = 0;
+  tableCellResizeStartWidth = 0;
+  tableCellResizeStartHeight = 0;
+  showTableModal = false;
+
+  // Zoom level
   zoom = 100;
   
   // Form and UI state
   documentForm!: FormGroup;
   showFormFields = true;
-  showHeader = true;
   
   // Line properties
   lineThickness = 2;
   lineColor = '#000000';
   
   // Pages
-  pages: {id: number, content: string}[] = [];
+  pages: EditorPage[] = [];
   currentPageIndex = 0;
   
   // Text formatting state
@@ -94,6 +132,8 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
   // Border properties
   showBorder = false;
   currentBorderStyle = 'solid';
+  currentBorderWidth = 1;
+  currentBorderColor = '#000000';
   
   // Undo/Redo history
   private undoStack: string[] = [];
@@ -112,7 +152,16 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
   // Image modal
   showImageModal = false;
 
-  // Language specific font mappings with proper typing
+  // Paper sizes in pixels (at 96 DPI)
+  paperSizes: {[key: string]: {width: number, height: number}} = {
+    'A4': {width: 794, height: 1123},      // 210mm x 297mm
+    'A5': {width: 559, height: 794},       // 148mm x 210mm
+    'Letter': {width: 816, height: 1056},  // 8.5in x 11in
+    'Legal': {width: 816, height: 1344},   // 8.5in x 14in
+    'Tabloid': {width: 1056, height: 1632} // 11in x 17in
+  };
+
+  // Language specific font mappings
   languageFontMap: Record<SupportedLanguage, string[]> = {
     english: ['Inter', 'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Montserrat'],
     tamil: ['Noto Sans Tamil', 'Latha', 'Vijaya', 'Kavivanar', 'Catamaran', 'Meera'],
@@ -121,7 +170,7 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     hindi: ['Noto Sans Devanagari', 'Poppins', 'Hind', 'Kalam', 'Teko', 'Karma']
   };
 
-  // Additional font sizes for complex scripts with proper typing
+  // Font sizes for complex scripts
   languageFontSizes: Record<SupportedLanguage, string[]> = {
     english: ['10', '12', '14', '16', '18', '20', '24', '32', '48'],
     tamil: ['14', '16', '18', '20', '22', '24', '28', '32', '48'],
@@ -140,6 +189,13 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
   constructor(private fb: FormBuilder, private http: HttpClient, private renderer: Renderer2) { }
 
   ngOnInit(): void {
+    this.initForm();
+    this.initFirstPage();
+    this.initFontOptions();
+    this.setupFormSubscriptions();
+  }
+
+  initForm(): void {
     this.documentForm = this.fb.group({
       purpose: ['purpose1', Validators.required],
       name: ['', Validators.required],
@@ -153,30 +209,217 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
       marginRight: [1.27, Validators.required],
       content: ['']
     });
-    
-    // Initialize with one empty page
+  }
+
+  initFirstPage(): void {
     this.pages = [{
       id: new Date().getTime(),
-      content: '<p>Start typing here...</p>'
+      content: '<p></p>',
+      hasBorder: false,
+      borderStyle: 'solid',
+      borderWidth: 1,
+      borderColor: '#000000'
     }];
+  }
 
-    // Initialize font options based on language
+  initFontOptions(): void {
     this.availableFonts = [...this.languageFontMap.english];
     this.availableFontSizes = [...this.languageFontSizes.english];
+  }
 
-    // Subscribe to language changes to update fonts
-    this.documentForm.get('language')?.valueChanges.subscribe((lang: string) => {
-      this.updateLanguageFonts();
+  setupFormSubscriptions(): void {
+    // Language change subscription
+    const languageControl = this.documentForm.get('language');
+    if (languageControl) {
+      this.subscriptions.push(
+        languageControl.valueChanges.subscribe((lang: string) => {
+          this.updateLanguageFonts();
+        })
+      );
+    }
+
+    // Paper size, layout and margin subscriptions
+    const layoutChangeControls = ['paperSize', 'pagelayout', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight'];
+    layoutChangeControls.forEach(field => {
+      const control = this.documentForm.get(field);
+      if (control) {
+        this.subscriptions.push(
+          control.valueChanges.subscribe(() => {
+            this.adjustCanvasDimensions();
+          })
+        );
+      }
     });
   }
 
-  /**
-   * Updates available fonts and font sizes based on selected language
-   */
+  ngAfterViewInit(): void {
+    this.setupEditor();
+    this.saveToHistory();
+    this.adjustCanvasDimensions();
+    
+    // Setup global mouse event handlers
+    document.addEventListener('mousemove', this.handleMouseMove);
+    document.addEventListener('mouseup', this.handleMouseUp);
+    document.addEventListener('selectionchange', this.handleSelectionChange);
+  }
+  
+  ngOnDestroy(): void {
+    // Clean up event listeners
+    document.removeEventListener('mousemove', this.handleMouseMove);
+    document.removeEventListener('mouseup', this.handleMouseUp);
+    document.removeEventListener('selectionchange', this.handleSelectionChange);
+    
+    // Unsubscribe from all form subscriptions
+    this.subscriptions.forEach(sub => sub.unsubscribe());
+  }
+
+  // ===== EDITOR SETUP AND CANVAS DIMENSIONS =====
+  
+  setupEditor(): void {
+    if (!this.canvasContent || !this.canvasContent.nativeElement) return;
+    
+    this.canvasContent.nativeElement.innerHTML = this.pages[this.currentPageIndex].content;
+    this.canvasContent.nativeElement.setAttribute('data-language', this.currentLanguage);
+    this.loadCurrentPageBorderSettings();
+    this.applyBorderToCurrentPage();
+    this.canvasContent.nativeElement.focus();
+    this.setupObjectHandlers();
+  }
+
+  adjustCanvasDimensions(): void {
+    // Get form values
+    const paperSize = this.documentForm.get('paperSize')?.value || 'A4';
+    const pageLayout = this.documentForm.get('pagelayout')?.value || 'portrait';
+    const marginTop = this.documentForm.get('marginTop')?.value || 1.27;
+    const marginBottom = this.documentForm.get('marginBottom')?.value || 1.27;
+    const marginLeft = this.documentForm.get('marginLeft')?.value || 1.27;
+    const marginRight = this.documentForm.get('marginRight')?.value || 1.27;
+    
+    // Get dimensions for the selected paper size
+    let dimensions = this.getPaperDimensions(paperSize);
+    
+    // Set dimensions based on orientation
+    let width, height;
+    if (pageLayout === 'portrait') {
+      width = dimensions.width;
+      height = dimensions.height;
+    } else { // landscape
+      width = dimensions.height;
+      height = dimensions.width;
+    }
+    
+    // Convert margins from cm to pixels (1cm ≈ 37.8px at 96 DPI)
+    const pxPerCm = 37.8;
+    const marginTopPx = marginTop * pxPerCm;
+    const marginBottomPx = marginBottom * pxPerCm;
+    const marginLeftPx = marginLeft * pxPerCm;
+    const marginRightPx = marginRight * pxPerCm;
+    
+    // Apply to all editor elements
+    this.applyDimensionsToAllEditors(width, height, marginTopPx, marginRightPx, marginBottomPx, marginLeftPx);
+    
+    // Reset any selection to refresh positions
+    this.resetSelection();
+  }
+
+  getPaperDimensions(paperSize: string): { width: number, height: number } {
+    // Check if it's a custom size or predefined
+    if (paperSize.includes('x')) {
+      try {
+        // Parse custom size (e.g., "400x600")
+        const parts = paperSize.split('x');
+        const width = parseInt(parts[0].trim(), 10);
+        const height = parseInt(parts[1].trim(), 10);
+        
+        if (!isNaN(width) && !isNaN(height) && width > 0 && height > 0) {
+          return { width, height };
+        }
+      } catch (e) {
+        console.error('Error parsing custom paper size:', e);
+      }
+    }
+    
+    // Return the predefined size or default to A4
+    return this.paperSizes[paperSize] || this.paperSizes['A4'];
+  }
+
+  applyDimensionsToAllEditors(width: number, height: number, marginTop: number, marginRight: number, marginBottom: number, marginLeft: number): void {
+    // Get all editor elements
+    const editors = document.querySelectorAll('.editor');
+    
+    // Apply dimensions and margins to all editors
+    editors.forEach(editor => {
+      (editor as HTMLElement).style.width = `${width}px`;
+      (editor as HTMLElement).style.height = `${height}px`;
+      
+      const canvasContent = editor.querySelector('.canvas-content');
+      if (canvasContent) {
+        (canvasContent as HTMLElement).style.padding = 
+          `${marginTop}px ${marginRight}px ${marginBottom}px ${marginLeft}px`;
+        this.updateMarginGuides(editor as HTMLElement, marginTop, marginRight, marginBottom, marginLeft);
+      }
+    });
+    
+    // Update add page button container width
+    const addPageContainer = document.querySelector('.add-page-container');
+    if (addPageContainer) {
+      (addPageContainer as HTMLElement).style.maxWidth = `${width}px`;
+    }
+  }
+
+  resetSelection(): void {
+    if (this.selectedObject) {
+      this.selectedObject = null;
+      const selectedElements = document.querySelectorAll('.selected');
+      selectedElements.forEach(el => el.classList.remove('selected'));
+    }
+  }
+
+  updateMarginGuides(editor: HTMLElement, top: number, right: number, bottom: number, left: number): void {
+    // Remove any existing margin guides
+    const existingGuides = editor.querySelectorAll('.margin-guide');
+    existingGuides.forEach(guide => guide.remove());
+    
+    // Create container for guides if it doesn't exist
+    let container = editor.querySelector('.margin-guides-container') as HTMLElement;
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 'margin-guides-container';
+      container.style.position = 'absolute';
+      container.style.top = '0';
+      container.style.left = '0';
+      container.style.width = '100%';
+      container.style.height = '100%';
+      container.style.pointerEvents = 'none';
+      container.style.zIndex = '1';
+      editor.appendChild(container);
+    } else {
+      // Clear existing guides
+      container.innerHTML = '';
+    }
+    
+    // Create guide positions
+    const guidePositions = [
+      { className: 'margin-guide top', style: { top: `${top}px`, left: '0', width: '100%', height: '1px' } },
+      { className: 'margin-guide right', style: { top: '0', right: `${right}px`, width: '1px', height: '100%' } },
+      { className: 'margin-guide bottom', style: { bottom: `${bottom}px`, left: '0', width: '100%', height: '1px' } },
+      { className: 'margin-guide left', style: { top: '0', left: `${left}px`, width: '1px', height: '100%' } }
+    ];
+    
+    // Create and append guides
+    guidePositions.forEach(pos => {
+      const guide = document.createElement('div');
+      guide.className = pos.className;
+      guide.style.position = 'absolute';
+      Object.assign(guide.style, pos.style);
+      guide.style.backgroundColor = 'rgba(67, 97, 238, 0.2)';
+      container.appendChild(guide);
+    });
+  }
+
   updateLanguageFonts(): void {
     // Get the selected language from the form
     const formLang = this.documentForm.get('language')?.value;
-    // Validate that it's a supported language
     const lang = (formLang && 
       ['english', 'tamil', 'telungu', 'malayalam', 'hindi'].includes(formLang)) 
       ? formLang as SupportedLanguage 
@@ -184,62 +427,47 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     
     this.currentLanguage = lang;
     
-    // Now TypeScript knows lang is a valid key
+    // Update font options
     this.availableFonts = this.languageFontMap[lang];
     this.availableFontSizes = this.languageFontSizes[lang];
     
     // Update current font family if needed
     if (!this.availableFonts.includes(this.currentFontFamily)) {
       this.currentFontFamily = this.availableFonts[0];
-      // Apply to selected text if any
       if (this.isSelectionInEditor()) {
         this.applyTextFormatting('fontName', this.currentFontFamily);
       }
     }
     
-    // Update font size if current size is smaller than minimum for this language
+    // Update font size if needed
     const minFontSize = parseInt(this.availableFontSizes[0], 10);
     if (parseInt(this.currentFontSize, 10) < minFontSize) {
       this.currentFontSize = minFontSize.toString();
-      // Apply to selected text if any
       if (this.isSelectionInEditor()) {
         this.applyTextFormatting('fontSize', this.currentFontSize);
       }
     }
     
-    // Update editor content language attribute
+    // Update editor language attribute
     if (this.canvasContent && this.canvasContent.nativeElement) {
       this.canvasContent.nativeElement.setAttribute('data-language', this.currentLanguage);
     }
     
-    // Notify user
     this.notify(`Font settings updated for ${lang}`, 'success');
   }
 
-  ngAfterViewInit(): void {
-    this.setupEditor();
-    this.saveToHistory();
-    
-    // Setup global mouse event handlers for object manipulation
-    document.addEventListener('mousemove', this.handleMouseMove);
-    document.addEventListener('mouseup', this.handleMouseUp);
-  }
-  
-  ngOnDestroy(): void {
-    // Cleanup event listeners on destroy
-    document.removeEventListener('mousemove', this.handleMouseMove);
-    document.removeEventListener('mouseup', this.handleMouseUp);
-    document.removeEventListener('selectionchange', this.handleSelectionChange);
-  }
-  
-  // ====== PAGE MANAGEMENT ======
+  // ===== PAGE MANAGEMENT =====
   
   addPage(): void {
     this.saveCurrentPageContent();
     
-    const newPage = {
+    const newPage: EditorPage = {
       id: new Date().getTime(),
-      content: '<p>New page content...</p>'
+      content: '<p></p>',
+      hasBorder: this.showBorder,
+      borderStyle: this.currentBorderStyle,
+      borderWidth: this.currentBorderWidth,
+      borderColor: this.currentBorderColor
     };
     
     this.pages.push(newPage);
@@ -250,8 +478,12 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
       if (this.canvasContent && this.canvasContent.nativeElement) {
         this.canvasContent.nativeElement.innerHTML = this.pages[this.currentPageIndex].content;
         this.canvasContent.nativeElement.setAttribute('data-language', this.currentLanguage);
+        this.applyBorderToCurrentPage();
         this.canvasContent.nativeElement.focus();
         this.setupObjectHandlers();
+        
+        // Apply canvas dimensions to the new page
+        this.adjustCanvasDimensions();
       }
     });
     
@@ -276,6 +508,8 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
       if (this.canvasContent && this.canvasContent.nativeElement) {
         this.canvasContent.nativeElement.innerHTML = this.pages[this.currentPageIndex].content;
         this.canvasContent.nativeElement.setAttribute('data-language', this.currentLanguage);
+        this.loadCurrentPageBorderSettings();
+        this.applyBorderToCurrentPage();
         this.canvasContent.nativeElement.focus();
         this.setupObjectHandlers();
       }
@@ -297,6 +531,11 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
       if (this.canvasContent && this.canvasContent.nativeElement) {
         this.canvasContent.nativeElement.innerHTML = this.pages[this.currentPageIndex].content;
         this.canvasContent.nativeElement.setAttribute('data-language', this.currentLanguage);
+        
+        // Load border settings from the page data
+        this.loadCurrentPageBorderSettings();
+        this.applyBorderToCurrentPage();
+        
         this.canvasContent.nativeElement.focus();
         this.setupObjectHandlers();
       }
@@ -306,25 +545,120 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
   saveCurrentPageContent(): void {
     if (this.canvasContent && this.canvasContent.nativeElement) {
       this.pages[this.currentPageIndex].content = this.canvasContent.nativeElement.innerHTML;
+      // Save border settings too
+      this.pages[this.currentPageIndex].hasBorder = this.showBorder;
+      this.pages[this.currentPageIndex].borderStyle = this.currentBorderStyle;
+      this.pages[this.currentPageIndex].borderWidth = this.currentBorderWidth;
+      this.pages[this.currentPageIndex].borderColor = this.currentBorderColor;
     }
   }
   
-  // ====== EDITOR SETUP ======
+  // ===== BORDER HANDLING =====
   
-  setupEditor(): void {
-    if (this.canvasContent && this.canvasContent.nativeElement) {
-      // Set initial content from pages array
-      this.canvasContent.nativeElement.innerHTML = this.pages[this.currentPageIndex].content;
-      this.canvasContent.nativeElement.setAttribute('data-language', this.currentLanguage);
-      this.canvasContent.nativeElement.focus();
-      
-      // Setup object handlers (selection, resize, etc.)
-      this.setupObjectHandlers();
-    }
+  loadCurrentPageBorderSettings(): void {
+    const page = this.pages[this.currentPageIndex];
+    this.showBorder = page.hasBorder || false;
+    this.currentBorderStyle = page.borderStyle || 'solid';
+    this.currentBorderWidth = page.borderWidth || 1;
+    this.currentBorderColor = page.borderColor || '#000000';
+  }
+
+  applyBorderToCurrentPage(): void {
+    if (!this.canvasContent || !this.canvasContent.nativeElement) return;
     
-    // Track selection changes
-    document.addEventListener('selectionchange', this.handleSelectionChange);
+    const element = this.canvasContent.nativeElement;
+    
+    if (this.showBorder) {
+      element.style.border = `${this.currentBorderWidth}px ${this.currentBorderStyle} ${this.currentBorderColor}`;
+      element.style.boxSizing = 'border-box';
+    } else {
+      element.style.border = 'none';
+    }
   }
+
+  toggleBorder(event: Event): void {
+    const checkbox = event.target as HTMLInputElement;
+    this.showBorder = checkbox.checked;
+    
+    if (!this.canvasContent?.nativeElement) return;
+    
+    this.saveToHistory();
+    
+    this.applyBorderToCurrentPage();
+    
+    // Update border state for current page
+    this.pages[this.currentPageIndex].hasBorder = this.showBorder;
+    this.pages[this.currentPageIndex].borderStyle = this.currentBorderStyle;
+    this.pages[this.currentPageIndex].borderWidth = this.currentBorderWidth;
+    this.pages[this.currentPageIndex].borderColor = this.currentBorderColor;
+    
+    this.notify(`Page border ${this.showBorder ? 'added' : 'removed'}`, 'success');
+    this.saveCurrentPageContent();
+  }
+
+  setBorderStyle(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    if (!select?.value) return;
+    
+    this.currentBorderStyle = select.value;
+    
+    // If border is not currently shown, don't apply anything
+    if (!this.showBorder || !this.canvasContent?.nativeElement) return;
+    
+    this.saveToHistory();
+    
+    // Apply the border style to the current page
+    this.applyBorderToCurrentPage();
+    
+    // Update border style for current page
+    this.pages[this.currentPageIndex].borderStyle = this.currentBorderStyle;
+    
+    this.notify(`Page border style updated to ${this.currentBorderStyle}`, 'success');
+    this.saveCurrentPageContent();
+  }
+
+ setBorderWidth(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (!input?.value) return;
+    
+    const width = parseInt(input.value, 10);
+    this.currentBorderWidth = width;
+    
+    if (!this.showBorder || !this.canvasContent?.nativeElement) return;
+    
+    this.saveToHistory();
+    
+    // Apply the border width to the current page
+    this.applyBorderToCurrentPage();
+    
+    // Update border width for current page
+    this.pages[this.currentPageIndex].borderWidth = this.currentBorderWidth;
+    
+    this.notify(`Page border width updated to ${this.currentBorderWidth}px`, 'success');
+    this.saveCurrentPageContent();
+  }
+
+  setBorderColor(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (!input?.value) return;
+    
+    this.currentBorderColor = input.value;
+    
+    if (!this.showBorder || !this.canvasContent?.nativeElement) return;
+    
+    this.saveToHistory();
+    
+    // Apply the border color to the current page
+    this.applyBorderToCurrentPage();
+    
+    // Update border color for current page
+    this.pages[this.currentPageIndex].borderColor = this.currentBorderColor;
+    
+    this.notify(`Page border color updated`, 'success');
+    this.saveCurrentPageContent();
+  }
+
+  // ===== OBJECT HANDLERS =====
   
   setupObjectHandlers(): void {
     if (!this.canvasContent || !this.canvasContent.nativeElement) return;
@@ -332,14 +666,16 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     // Reset objects array for current page
     this.objects = [];
     
-    // Setup handlers for all editor objects (images, lines, etc.)
+    // Setup handlers for editor objects
     this.setupImageHandlers();
     this.setupLineHandlers();
+    this.setupTableHandlers();
     
     // Deselect on click outside
     this.canvasContent.nativeElement.addEventListener('click', (e: MouseEvent) => {
       if (e.target === this.canvasContent.nativeElement) {
         this.selectedObject = null;
+        this.selectedTableCell = null;
       }
     });
   }
@@ -351,7 +687,7 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     const imgContainers = this.canvasContent.nativeElement.querySelectorAll('.img-container');
     
     imgContainers.forEach((container: HTMLElement) => {
-      // Remove existing click listeners to avoid duplicates
+      // To avoid duplicate listeners, clone and replace
       const newContainer = container.cloneNode(true) as HTMLElement;
       container.parentNode?.replaceChild(newContainer, container);
       
@@ -370,38 +706,43 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
         }
       });
       
-      // Find the image element and track its dimensions
-      const imgElement = newContainer.querySelector('img');
-      if (imgElement) {
-        const rect = newContainer.getBoundingClientRect();
-        
-        // Create or update object in our objects array
-        const existingObj = this.objects.find(obj => 
-          obj.element === newContainer || 
-          (obj as ImageObject).src === imgElement.src
-        );
-        
-        if (existingObj) {
-          existingObj.element = newContainer;
-          existingObj.width = rect.width;
-          existingObj.height = rect.height;
-        } else {
-          const newObj: ImageObject = {
-            id: this.generateId(),
-            type: 'image',
-            x: rect.left,
-            y: rect.top,
-            width: rect.width,
-            height: rect.height,
-            zIndex: this.objects.length + 1,
-            rotation: 0,
-            src: imgElement.src,
-            element: newContainer
-          };
-          this.objects.push(newObj);
-        }
-      }
+      // Register the image in our objects array
+      this.registerImageObject(newContainer);
     });
+  }
+  
+  registerImageObject(container: HTMLElement): void {
+    const imgElement = container.querySelector('img');
+    if (!imgElement) return;
+    
+    const rect = container.getBoundingClientRect();
+    
+    // Check if this image is already registered
+    const existingObj = this.objects.find(obj => 
+      obj.element === container || 
+      (obj as ImageObject).src === imgElement.src
+    );
+    
+    if (existingObj) {
+      existingObj.element = container;
+      existingObj.width = rect.width;
+      existingObj.height = rect.height;
+    } else {
+      // Create and register new object
+      const newObj: ImageObject = {
+        id: this.generateId(),
+        type: 'image',
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        zIndex: this.objects.length + 1,
+        rotation: 0,
+        src: imgElement.src,
+        element: container
+      };
+      this.objects.push(newObj);
+    }
   }
   
   setupLineHandlers(): void {
@@ -411,7 +752,7 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     const lineContainers = this.canvasContent.nativeElement.querySelectorAll('.line-container');
     
     lineContainers.forEach((container: HTMLElement) => {
-      // Remove existing click listeners to avoid duplicates
+      // Clone to avoid duplicate listeners
       const newContainer = container.cloneNode(true) as HTMLElement;
       container.parentNode?.replaceChild(newContainer, container);
       
@@ -426,54 +767,737 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
       newContainer.addEventListener('mousedown', (e) => {
         if (this.isResizing || this.isRotating) return;
         if (e.target === newContainer || (e.target as HTMLElement).classList.contains('editor-line')) {
-          e.preventDefault(); // Prevent text selection during drag
+          e.preventDefault();
           this.startDrag(e, newContainer);
         }
       });
       
-      // Track line dimensions
-      const rect = newContainer.getBoundingClientRect();
-      const orientation = newContainer.getAttribute('data-orientation') as 'horizontal' | 'vertical';
-      const thickness = parseInt(newContainer.getAttribute('data-thickness') || '2');
-      const color = newContainer.getAttribute('data-color') || '#000000';
-      
-      // Create or update object in our objects array
-      const existingObj = this.objects.find(obj => obj.element === newContainer);
-      
-      if (existingObj && existingObj.type === 'line') {
-        existingObj.element = newContainer;
-        existingObj.width = rect.width;
-        existingObj.height = rect.height;
-        (existingObj as LineObject).orientation = orientation;
-        (existingObj as LineObject).thickness = thickness;
-        (existingObj as LineObject).color = color;
-      } else {
-        const newObj: LineObject = {
-          id: this.generateId(),
-          type: 'line',
-          x: rect.left,
-          y: rect.top,
-          width: rect.width,
-          height: rect.height,
-          zIndex: this.objects.length + 1,
-          rotation: 0,
-          orientation: orientation,
-          thickness: thickness,
-          color: color,
-          element: newContainer
-        };
-        this.objects.push(newObj);
-      }
+      // Register the line in our objects array
+      this.registerLineObject(newContainer);
     });
   }
   
-  toggleFormFields(): void {
-    this.showFormFields = !this.showFormFields;
+  registerLineObject(container: HTMLElement): void {
+    const rect = container.getBoundingClientRect();
+    const orientation = container.getAttribute('data-orientation') as 'horizontal' | 'vertical';
+    const thickness = parseInt(container.getAttribute('data-thickness') || '2');
+    const color = container.getAttribute('data-color') || '#000000';
+    
+    // Check if already registered
+    const existingObj = this.objects.find(obj => obj.element === container);
+    
+    if (existingObj && existingObj.type === 'line') {
+      existingObj.element = container;
+      existingObj.width = rect.width;
+      existingObj.height = rect.height;
+      (existingObj as LineObject).orientation = orientation;
+      (existingObj as LineObject).thickness = thickness;
+      (existingObj as LineObject).color = color;
+    } else {
+      // Create and register new object
+      const newObj: LineObject = {
+        id: this.generateId(),
+        type: 'line',
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        zIndex: this.objects.length + 1,
+        rotation: 0,
+        orientation: orientation,
+        thickness: thickness,
+        color: color,
+        element: container
+      };
+      this.objects.push(newObj);
+    }
+  }
+  
+  setupTableHandlers(): void {
+    if (!this.canvasContent || !this.canvasContent.nativeElement) return;
+    
+    // Find all tables
+    const tables = this.canvasContent.nativeElement.querySelectorAll('.editor-table');
+    
+    tables.forEach((table: HTMLTableElement) => {
+      // Add handler to make the table draggable
+      table.addEventListener('mousedown', (e) => {
+        if (e.target === table || (e.target as HTMLElement).tagName === 'TABLE') {
+          e.preventDefault();
+          e.stopPropagation();
+          
+          // Select the table first
+          this.selectObject(table, 'table');
+          this.startDrag(e, table);
+        }
+      });
+      
+      // Add cell selection handlers
+      const cells = table.querySelectorAll('td');
+      cells.forEach((cell: HTMLTableCellElement) => {
+        cell.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.selectTableCell(cell);
+        });
+      });
+      
+      // Register the table in our objects array
+      this.registerTableObject(table);
+    });
   }
 
-  toggleHeader(): void {
-    this.showHeader = !this.showHeader;
+  registerTableObject(table: HTMLTableElement): void {
+    const rect = table.getBoundingClientRect();
+    
+    // Extract table properties
+    const rows = table.rows.length;
+    const columns = table.rows[0]?.cells.length || 0;
+    
+    const computedStyle = window.getComputedStyle(table);
+    const borderStyle = computedStyle.borderStyle || 'solid';
+    const borderWidth = parseInt(computedStyle.borderWidth || '1', 10);
+    
+    // Check if already registered
+    const existingObj = this.objects.find(obj => obj.element === table && obj.type === 'table');
+    
+    if (existingObj && existingObj.type === 'table') {
+      existingObj.width = rect.width;
+      existingObj.height = rect.height;
+      (existingObj as TableObject).rows = rows;
+      (existingObj as TableObject).columns = columns;
+      (existingObj as TableObject).borderStyle = borderStyle;
+      (existingObj as TableObject).borderWidth = borderWidth;
+    } else {
+      // Create and register new object
+      const newObj: TableObject = {
+        id: this.generateId(),
+        type: 'table',
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        zIndex: this.objects.length + 1,
+        rotation: 0,
+        rows: rows,
+        columns: columns,
+        borderStyle: borderStyle,
+        borderWidth: borderWidth,
+        element: table
+      };
+      this.objects.push(newObj);
+    }
   }
+
+  selectTableCell(cell: HTMLTableCellElement): void {
+    // Clear previous selection
+    const previouslySelected = document.querySelectorAll('.table-cell.selected');
+    previouslySelected.forEach(selected => {
+      selected.classList.remove('selected');
+    });
+    
+    // Mark this cell as selected
+    cell.classList.add('selected');
+    this.selectedTableCell = cell;
+    
+    // Position the resize controls
+    this.updateTableCellResizeHandlersPosition();
+  }
+
+  updateTableCellResizeHandlersPosition(): void {
+    if (!this.selectedTableCell) return;
+    
+    const rect = this.selectedTableCell.getBoundingClientRect();
+    
+    // Get the resize controls container
+    const resizeControls = document.querySelector('.table-cell-resize-controls') as HTMLElement;
+    if (!resizeControls) return;
+    
+    // Position the resize controls
+    resizeControls.style.top = `${rect.top}px`;
+    resizeControls.style.left = `${rect.left}px`;
+    resizeControls.style.width = `${rect.width}px`;
+    resizeControls.style.height = `${rect.height}px`;
+  }
+
+  startTableCellResize(e: MouseEvent, direction: string): void {
+    if (!this.selectedTableCell) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    this.isTableCellResizing = true;
+    this.tableCellResizeDirection = direction;
+    this.tableCellResizeStartX = e.clientX;
+    this.tableCellResizeStartY = e.clientY;
+    
+    const rect = this.selectedTableCell.getBoundingClientRect();
+    this.tableCellResizeStartWidth = rect.width;
+    this.tableCellResizeStartHeight = rect.height;
+    
+    // Add a class to indicate resizing
+    this.selectedTableCell.classList.add('resizing');
+  }
+
+  handleTableCellResize(e: MouseEvent): void {
+    if (!this.isTableCellResizing || !this.selectedTableCell) return;
+    
+    const deltaX = e.clientX - this.tableCellResizeStartX;
+    const deltaY = e.clientY - this.tableCellResizeStartY;
+    
+    // Apply zoom correction
+    const zoomFactor = this.zoom / 100;
+    const scaledDeltaX = deltaX / zoomFactor;
+    const scaledDeltaY = deltaY / zoomFactor;
+    
+    // Calculate new dimensions
+    let newWidth = this.tableCellResizeStartWidth;
+    let newHeight = this.tableCellResizeStartHeight;
+    
+    if (this.tableCellResizeDirection === 'right') {
+      newWidth = Math.max(30, this.tableCellResizeStartWidth + scaledDeltaX);
+      this.selectedTableCell.style.width = `${newWidth}px`;
+    } else if (this.tableCellResizeDirection === 'bottom') {
+      newHeight = Math.max(20, this.tableCellResizeStartHeight + scaledDeltaY);
+      this.selectedTableCell.style.height = `${newHeight}px`;
+    }
+    
+    // Update resize handlers position
+    this.updateTableCellResizeHandlersPosition();
+  }
+
+  endTableCellResize(): void {
+    if (!this.isTableCellResizing || !this.selectedTableCell) return;
+    
+    this.isTableCellResizing = false;
+    this.selectedTableCell.classList.remove('resizing');
+    
+    // Save state for undo
+    this.saveToHistory();
+    this.saveCurrentPageContent();
+  }
+  
+  selectObject(element: HTMLElement, type: string, orientation?: 'horizontal' | 'vertical'): void {
+    // Clear table cell selection if any
+    this.selectedTableCell = null;
+    const previouslySelectedCells = document.querySelectorAll('.table-cell.selected');
+    previouslySelectedCells.forEach(cell => cell.classList.remove('selected'));
+    
+    // Find the corresponding object
+    const obj = this.objects.find(o => o.element === element);
+    
+    if (obj) {
+      this.selectedObject = obj;
+      
+      // Add selected class to the element
+      element.classList.add('selected');
+      
+      // Remove selected class from all other elements
+      const selectors = ['.img-container', '.line-container', '.editor-table'];
+      selectors.forEach(selector => {
+        const allElements = this.canvasContent.nativeElement.querySelectorAll(selector);
+        allElements.forEach((el: HTMLElement) => {
+          if (el !== element) {
+            el.classList.remove('selected');
+          }
+        });
+      });
+      
+      // Update the position of resize handlers after selection
+      setTimeout(() => this.updateResizeHandlersPosition(), 0);
+    }
+  }
+  
+  // ===== OBJECT MANIPULATION =====
+  
+  selectedObjectIsSmall(): boolean {
+    if (!this.selectedObject || !this.selectedObject.element) return false;
+    
+    const rect = this.selectedObject.element.getBoundingClientRect();
+    // Consider "small" if either dimension is less than 80px
+    return rect.width < 80 || rect.height < 80;
+  }
+
+  selectedObjectIsTiny(): boolean {
+    if (!this.selectedObject || !this.selectedObject.element) return false;
+    
+    const rect = this.selectedObject.element.getBoundingClientRect();
+    // Consider "tiny" if either dimension is less than 40px
+    return rect.width < 40 || rect.height < 40;
+  }
+  
+  updateResizeHandlersPosition(): void {
+    if (!this.selectedObject || !this.selectedObject.element) return;
+    
+    const element = this.selectedObject.element;
+    const rect = element.getBoundingClientRect();
+    
+    // Get the resize controls container
+    const resizeControls = document.querySelector('.resize-controls') as HTMLElement;
+    if (!resizeControls) return;
+    
+    // Position the resize controls container
+    resizeControls.style.top = `${rect.top}px`;
+    resizeControls.style.left = `${rect.left}px`;
+    resizeControls.style.width = `${rect.width}px`;
+    resizeControls.style.height = `${rect.height}px`;
+    
+    // Apply rotation if any
+    if (this.selectedObject.rotation) {
+      resizeControls.style.transform = `rotate(${this.selectedObject.rotation}deg)`;
+      resizeControls.style.transformOrigin = 'center center';
+    } else {
+      resizeControls.style.transform = '';
+    }
+    
+    // Apply size-based classes
+    resizeControls.classList.toggle('small-element', this.selectedObjectIsSmall());
+    resizeControls.classList.toggle('tiny-element', this.selectedObjectIsTiny());
+    
+    // Adjust rotate handle for tiny elements
+    if (this.selectedObjectIsTiny()) {
+      const rotateHandle = resizeControls.querySelector('.rotate-handle') as HTMLElement;
+      if (rotateHandle) {
+        rotateHandle.style.top = '-18px';
+      }
+    }
+  }
+  
+  startDrag(e: MouseEvent, element: HTMLElement): void {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Find or select the object
+    const obj = this.objects.find(o => o.element === element);
+    if (!obj) return;
+    
+    // Select this object if not already selected
+    if (this.selectedObject !== obj) {
+      if (obj.type === 'image') {
+        this.selectObject(element, 'image');
+      } else if (obj.type === 'line') {
+        const orientation = element.getAttribute('data-orientation') as 'horizontal' | 'vertical';
+        this.selectObject(element, 'line', orientation);
+      } else if (obj.type === 'table') {
+        this.selectObject(element, 'table');
+      }
+    }
+    
+    // Ensure element has the right CSS setup for dragging
+    element.style.position = 'relative';
+    
+    // Store drag start information
+    this.isDragging = true;
+    this.dragStartX = e.clientX;
+    this.dragStartY = e.clientY;
+    
+    // Get current position from style
+    const left = parseInt(element.style.left || '0', 10);
+    const top = parseInt(element.style.top || '0', 10);
+    
+    this.dragStartObjX = left;
+    this.dragStartObjY = top;
+    
+    // Add dragging class
+    element.classList.add('dragging');
+  }
+  
+  startResize(e: MouseEvent, handle: string): void {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!this.selectedObject || !this.selectedObject.element) return;
+    
+    // Initialize resizing state
+    this.isResizing = true;
+    this.resizeHandle = handle;
+    this.resizeStartX = e.clientX;
+    this.resizeStartY = e.clientY;
+    
+    const element = this.selectedObject.element;
+    const rect = element.getBoundingClientRect();
+    this.resizeStartWidth = rect.width;
+    this.resizeStartHeight = rect.height;
+    
+    // Store current position for accurate resizing
+    this.dragStartObjX = parseInt(element.style.left || '0', 10);
+    this.dragStartObjY = parseInt(element.style.top || '0', 10);
+    
+    // Set minimum dimensions based on object type
+    this.minResizeWidth = this.selectedObject.type === 'image' ? 30 : 20;
+    this.minResizeHeight = this.selectedObject.type === 'image' ? 30 : 20;
+    
+    // Add resizing class
+    element.classList.add('resizing');
+  }
+  
+  startRotate(e: MouseEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!this.selectedObject || !this.selectedObject.element) return;
+    
+    // Initialize rotation state
+    this.isRotating = true;
+    
+    // Calculate center of object
+    const rect = this.selectedObject.element.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    
+    // Calculate initial angle
+    const angleRadians = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+    this.rotateStartAngle = (angleRadians * 180 / Math.PI);
+    
+    // Store current rotation
+    this.rotateStartX = this.selectedObject.rotation || 0;
+  }
+  
+  handleMouseMove = (e: MouseEvent): void => {
+    // Handle table cell resizing if active
+    if (this.isTableCellResizing) {
+      this.handleTableCellResize(e);
+      return;
+    }
+    
+    if (this.isDragging && this.selectedObject && this.selectedObject.element) {
+      this.handleDragMove(e);
+    } else if (this.isResizing && this.selectedObject && this.selectedObject.element) {
+      this.handleResizeMove(e);
+    } else if (this.isRotating && this.selectedObject && this.selectedObject.element) {
+      this.handleRotateMove(e);
+    }
+  };
+  
+  handleDragMove(e: MouseEvent): void {
+    // Calculate the new position with zoom correction
+    const deltaX = e.clientX - this.dragStartX;
+    const deltaY = e.clientY - this.dragStartY;
+    const zoomFactor = this.zoom / 100;
+    const scaledDeltaX = deltaX / zoomFactor;
+    const scaledDeltaY = deltaY / zoomFactor;
+    
+    const newX = this.dragStartObjX + scaledDeltaX;
+    const newY = this.dragStartObjY + scaledDeltaY;
+    
+    // Update the element's position
+    const element = this.selectedObject!.element!;
+    element.style.position = 'relative';
+    element.style.left = `${newX}px`;
+    element.style.top = `${newY}px`;
+    
+    // Update object coordinates
+    this.selectedObject!.x = newX;
+    this.selectedObject!.y = newY;
+    
+    // Update resize handlers position
+    this.updateResizeHandlersPosition();
+  }
+  
+  handleResizeMove(e: MouseEvent): void {
+    // Calculate deltas with zoom correction
+    const deltaX = e.clientX - this.resizeStartX;
+    const deltaY = e.clientY - this.resizeStartY;
+    const zoomFactor = this.zoom / 100;
+    const scaledDeltaX = deltaX / zoomFactor;
+    const scaledDeltaY = deltaY / zoomFactor;
+    
+    // Get the element
+    const element = this.selectedObject!.element!;
+    
+    // Base values
+    let newWidth = this.resizeStartWidth;
+    let newHeight = this.resizeStartHeight;
+    let leftOffset = this.dragStartObjX;
+    let topOffset = this.dragStartObjY;
+    
+    // Handle resize based on object type
+    switch (this.selectedObject!.type) {
+      case 'image':
+        this.resizeImage(element, scaledDeltaX, scaledDeltaY, leftOffset, topOffset, newWidth, newHeight);
+        break;
+      case 'line':
+        this.resizeLine(element, scaledDeltaX, scaledDeltaY, leftOffset, topOffset, newWidth, newHeight);
+        break;
+      case 'table':
+        this.resizeTable(element, scaledDeltaX, scaledDeltaY, leftOffset, topOffset, newWidth, newHeight);
+        break;
+    }
+    
+    // Update resize handlers position
+    this.updateResizeHandlersPosition();
+  }
+  
+  resizeImage(element: HTMLElement, scaledDeltaX: number, scaledDeltaY: number, leftOffset: number, topOffset: number, newWidth: number, newHeight: number): void {
+    const img = element.querySelector('img');
+    if (!img) return;
+    
+    // Handle each resize direction
+    switch(this.resizeHandle) {
+      case 'se':
+        newWidth = Math.max(this.minResizeWidth, this.resizeStartWidth + scaledDeltaX);
+        newHeight = Math.max(this.minResizeHeight, this.resizeStartHeight + scaledDeltaY);
+        break;
+      case 'sw':
+        newWidth = Math.max(this.minResizeWidth, this.resizeStartWidth - scaledDeltaX);
+        newHeight = Math.max(this.minResizeHeight, this.resizeStartHeight + scaledDeltaY);
+        leftOffset = this.dragStartObjX + scaledDeltaX;
+        // Adjust offset if minimum width reached
+        if (newWidth === this.minResizeWidth) {
+          leftOffset = this.dragStartObjX + (this.resizeStartWidth - this.minResizeWidth);
+        }
+        break;
+      case 'ne':
+        newWidth = Math.max(this.minResizeWidth, this.resizeStartWidth + scaledDeltaX);
+        newHeight = Math.max(this.minResizeHeight, this.resizeStartHeight - scaledDeltaY);
+        topOffset = this.dragStartObjY + scaledDeltaY;
+        // Adjust offset if minimum height reached
+        if (newHeight === this.minResizeHeight) {
+          topOffset = this.dragStartObjY + (this.resizeStartHeight - this.minResizeHeight);
+        }
+        break;
+      case 'nw':
+        newWidth = Math.max(this.minResizeWidth, this.resizeStartWidth - scaledDeltaX);
+        newHeight = Math.max(this.minResizeHeight, this.resizeStartHeight - scaledDeltaY);
+        leftOffset = this.dragStartObjX + scaledDeltaX;
+        topOffset = this.dragStartObjY + scaledDeltaY;
+        // Adjust offsets if minimum dimensions reached
+        if (newWidth === this.minResizeWidth) {
+          leftOffset = this.dragStartObjX + (this.resizeStartWidth - this.minResizeWidth);
+        }
+        if (newHeight === this.minResizeHeight) {
+          topOffset = this.dragStartObjY + (this.resizeStartHeight - this.minResizeHeight);
+        }
+        break;
+      case 'n':
+        newHeight = Math.max(this.minResizeHeight, this.resizeStartHeight - scaledDeltaY);
+        topOffset = this.dragStartObjY + scaledDeltaY;
+        // Adjust offset if minimum height reached
+        if (newHeight === this.minResizeHeight) {
+          topOffset = this.dragStartObjY + (this.resizeStartHeight - this.minResizeHeight);
+        }
+        break;
+      case 's':
+        newHeight = Math.max(this.minResizeHeight, this.resizeStartHeight + scaledDeltaY);
+        break;
+      case 'e':
+        newWidth = Math.max(this.minResizeWidth, this.resizeStartWidth + scaledDeltaX);
+        break;
+      case 'w':
+        newWidth = Math.max(this.minResizeWidth, this.resizeStartWidth - scaledDeltaX);
+        leftOffset = this.dragStartObjX + scaledDeltaX;
+        // Adjust offset if minimum width reached
+        if (newWidth === this.minResizeWidth) {
+          leftOffset = this.dragStartObjX + (this.resizeStartWidth - this.minResizeWidth);
+        }
+        break;
+    }
+    
+    // Update element position and dimensions
+    element.style.position = 'relative';
+    element.style.left = `${leftOffset}px`;
+    element.style.top = `${topOffset}px`;
+    
+    img.style.width = `${newWidth}px`;
+    img.style.height = `${newHeight}px`;
+    
+    // Update object properties
+    this.selectedObject!.width = newWidth;
+    this.selectedObject!.height = newHeight;
+    this.selectedObject!.x = leftOffset;
+    this.selectedObject!.y = topOffset;
+  }
+  
+  resizeLine(element: HTMLElement, scaledDeltaX: number, scaledDeltaY: number, leftOffset: number, topOffset: number, newWidth: number, newHeight: number): void {
+    const line = element.querySelector('.editor-line') as HTMLElement;
+    if (!line) return;
+    
+    // Get line orientation
+    const orientation = (this.selectedObject as LineObject).orientation;
+    
+    if (orientation === 'horizontal') {
+      // For horizontal line, only resize width
+      switch(this.resizeHandle) {
+        case 'e':
+        case 'ne':
+        case 'se':
+          newWidth = Math.max(this.minResizeWidth, this.resizeStartWidth + scaledDeltaX);
+          break;
+        case 'w':
+        case 'nw':
+        case 'sw':
+          newWidth = Math.max(this.minResizeWidth, this.resizeStartWidth - scaledDeltaX);
+          leftOffset = this.dragStartObjX + scaledDeltaX;
+          // Adjust offset if minimum width reached
+          if (newWidth === this.minResizeWidth) {
+            leftOffset = this.dragStartObjX + (this.resizeStartWidth - this.minResizeWidth);
+          }
+          break;
+      }
+      
+      // Update element position and dimensions
+      element.style.position = 'relative';
+      element.style.left = `${leftOffset}px`;
+      
+      line.style.width = `${newWidth}px`;
+      line.style.height = `${(this.selectedObject as LineObject).thickness}px`;
+      
+    } else {
+      // For vertical line, only resize height
+      switch(this.resizeHandle) {
+        case 'n':
+        case 'ne':
+        case 'nw':
+          newHeight = Math.max(this.minResizeHeight, this.resizeStartHeight - scaledDeltaY);
+          topOffset = this.dragStartObjY + scaledDeltaY;
+          // Adjust offset if minimum height reached
+          if (newHeight === this.minResizeHeight) {
+            topOffset = this.dragStartObjY + (this.resizeStartHeight - this.minResizeHeight);
+          }
+          break;
+        case 's':
+        case 'se':
+        case 'sw':
+          newHeight = Math.max(this.minResizeHeight, this.resizeStartHeight + scaledDeltaY);
+          break;
+      }
+      
+      // Update element position and dimensions
+      element.style.position = 'relative';
+      element.style.top = `${topOffset}px`;
+      
+      line.style.height = `${newHeight}px`;
+      line.style.width = `${(this.selectedObject as LineObject).thickness}px`;
+    }
+    
+    // Update object properties
+    this.selectedObject!.width = newWidth;
+    this.selectedObject!.height = newHeight;
+    this.selectedObject!.x = leftOffset;
+    this.selectedObject!.y = topOffset;
+  }
+  
+  resizeTable(element: HTMLElement, scaledDeltaX: number, scaledDeltaY: number, leftOffset: number, topOffset: number, newWidth: number, newHeight: number): void {
+    // Handle each resize direction
+    switch(this.resizeHandle) {
+      case 'se':
+        newWidth = Math.max(100, this.resizeStartWidth + scaledDeltaX);
+        newHeight = Math.max(50, this.resizeStartHeight + scaledDeltaY);
+        break;
+      case 'sw':
+        newWidth = Math.max(100, this.resizeStartWidth - scaledDeltaX);
+        newHeight = Math.max(50, this.resizeStartHeight + scaledDeltaY);
+        leftOffset = this.dragStartObjX + scaledDeltaX;
+        if (newWidth === 100) {
+          leftOffset = this.dragStartObjX + (this.resizeStartWidth - 100);
+        }
+        break;
+      case 'ne':
+        newWidth = Math.max(100, this.resizeStartWidth + scaledDeltaX);
+        newHeight = Math.max(50, this.resizeStartHeight - scaledDeltaY);
+        topOffset = this.dragStartObjY + scaledDeltaY;
+        if (newHeight === 50) {
+          topOffset = this.dragStartObjY + (this.resizeStartHeight - 50);
+        }
+        break;
+      case 'nw':
+        newWidth = Math.max(100, this.resizeStartWidth - scaledDeltaX);
+        newHeight = Math.max(50, this.resizeStartHeight - scaledDeltaY);
+        leftOffset = this.dragStartObjX + scaledDeltaX;
+        topOffset = this.dragStartObjY + scaledDeltaY;
+        if (newWidth === 100) {
+          leftOffset = this.dragStartObjX + (this.resizeStartWidth - 100);
+        }
+        if (newHeight === 50) {
+          topOffset = this.dragStartObjY + (this.resizeStartHeight - 50);
+        }
+        break;
+      case 'n':
+        newHeight = Math.max(50, this.resizeStartHeight - scaledDeltaY);
+        topOffset = this.dragStartObjY + scaledDeltaY;
+        if (newHeight === 50) {
+          topOffset = this.dragStartObjY + (this.resizeStartHeight - 50);
+        }
+        break;
+      case 's':
+        newHeight = Math.max(50, this.resizeStartHeight + scaledDeltaY);
+        break;
+      case 'e':
+        newWidth = Math.max(100, this.resizeStartWidth + scaledDeltaX);
+        break;
+      case 'w':
+        newWidth = Math.max(100, this.resizeStartWidth - scaledDeltaX);
+        leftOffset = this.dragStartObjX + scaledDeltaX;
+        if (newWidth === 100) {
+          leftOffset = this.dragStartObjX + (this.resizeStartWidth - 100);
+        }
+        break;
+    }
+    
+    // Update element position and dimensions
+    element.style.position = 'relative';
+    element.style.left = `${leftOffset}px`;
+    element.style.top = `${topOffset}px`;
+    element.style.width = `${newWidth}px`;
+    
+    // Update object properties
+    this.selectedObject!.width = newWidth;
+    this.selectedObject!.height = newHeight;
+    this.selectedObject!.x = leftOffset;
+    this.selectedObject!.y = topOffset;
+  }
+  
+  handleRotateMove(e: MouseEvent): void {
+    // Calculate center of object
+    const rect = this.selectedObject!.element!.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    
+    // Calculate current angle
+    const angleRadians = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+    const currentAngle = (angleRadians * 180 / Math.PI);
+    
+    // Calculate rotation change
+    const angleDelta = currentAngle - this.rotateStartAngle;
+    let newRotation = ((this.rotateStartX + angleDelta) % 360 + 360) % 360;
+    
+    // Apply rotation to element
+    this.selectedObject!.element!.style.transform = `rotate(${newRotation}deg)`;
+    
+    // Update object rotation
+    this.selectedObject!.rotation = newRotation;
+    
+    // Update resize handlers position and rotation
+    this.updateResizeHandlersPosition();
+  }
+  
+  handleMouseUp = (e: MouseEvent): void => {
+    // Handle table cell resizing
+    if (this.isTableCellResizing) {
+      this.endTableCellResize();
+      return;
+    }
+    
+    if (this.isDragging || this.isResizing || this.isRotating) {
+      // End the operation
+      if (this.selectedObject && this.selectedObject.element) {
+        // Remove special classes
+        this.selectedObject.element.classList.remove('dragging', 'resizing');
+        
+        // Update resize handlers position one final time
+        this.updateResizeHandlersPosition();
+      }
+      
+      this.isDragging = false;
+      this.isResizing = false;
+      this.isRotating = false;
+      
+      // Save state for undo
+      this.saveToHistory();
+      this.saveCurrentPageContent();
+    }
+  };
+  
+  // ===== TEXT FORMATTING =====
   
   handleSelectionChange = (): void => {
     this.selection = window.getSelection();
@@ -532,19 +1556,6 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     if (color) {
       this.currentColor = this.rgbToHex(color);
     }
-    
-    // Check border
-    const border = window.getComputedStyle(parentEl).border;
-    if (border && border !== 'none') {
-      this.showBorder = true;
-      // Try to extract border style
-      const borderStyle = window.getComputedStyle(parentEl).borderStyle;
-      if (borderStyle && ['solid', 'dotted', 'dashed', 'double'].includes(borderStyle)) {
-        this.currentBorderStyle = borderStyle;
-      }
-    } else {
-      this.showBorder = false;
-    }
   }
   
   rgbToHex(rgb: string): string {
@@ -560,8 +1571,6 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
   }
 
-  // ====== TEXT FORMATTING ======
-  
   applyTextFormatting(command: string, value: string = ''): void {
     if (!this.isSelectionInEditor()) {
       this.canvasContent.nativeElement.focus();
@@ -570,7 +1579,6 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     this.saveToHistory();
     document.execCommand(command, false, value);
     this.updateFormatButtons();
-    // Don't show notification for every formatting change as it can be distracting
   }
   
   toggleBold(): void {
@@ -610,7 +1618,38 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     if (!select?.value) return;
     
     this.currentFontSize = select.value;
-    this.applyTextFormatting('fontSize', select.value);
+    
+    // First ensure we have a selection
+    if (!this.isSelectionInEditor()) {
+      this.canvasContent.nativeElement.focus();
+    }
+    
+    // Save to history
+    this.saveToHistory();
+    
+    // Get the selection
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    
+    // Create a span with the specific font size
+    const range = selection.getRangeAt(0);
+    const span = document.createElement('span');
+    span.style.fontSize = `${this.currentFontSize}px`;
+    
+    // Clone the range contents into the span
+    span.appendChild(range.extractContents());
+    
+    // Insert the span
+    range.insertNode(span);
+    
+    // Position cursor at the end
+    range.selectNodeContents(span);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    
+    // Update format buttons
+    this.updateFormatButtons();
   }
   
   setFontFamily(event: Event): void {
@@ -654,115 +1693,292 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     this.notify('Indentation decreased', 'success');
   }
 
-  // ====== BORDER CONTROLS ======
+  // ===== TABLE INSERTION =====
   
-  /**
-   * Toggle border on selected element or current paragraph
-   */
-  toggleBorder(event: Event): void {
-    const checkbox = event.target as HTMLInputElement;
-    this.showBorder = checkbox.checked;
+  insertTable(): void {
+    this.saveToHistory();
     
-    if (!this.isSelectionInEditor()) {
-      this.canvasContent.nativeElement.focus();
-    }
+    if (!this.canvasContent?.nativeElement) return;
     
-    // Get the current selection or current paragraph
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
+    // Focus the editor first
+    this.canvasContent.nativeElement.focus();
     
-    const range = selection.getRangeAt(0);
-    const parentEl = this.getClosestBlock(range.startContainer);
+    // Create table element
+    const table = document.createElement('table');
+    table.className = 'editor-table draggable';
+    table.style.borderCollapse = 'collapse';
+    table.style.width = '100%';
+    table.style.border = `${this.tableBorderWidth}px ${this.tableBorderStyle} #000`;
     
-    if (parentEl) {
-      this.saveToHistory();
+    // Create table structure
+    const tbody = document.createElement('tbody');
+    
+    for (let i = 0; i < this.tableRows; i++) {
+      const row = document.createElement('tr');
       
-      if (this.showBorder) {
-        parentEl.style.border = `1px ${this.currentBorderStyle} #000`;
-        parentEl.style.padding = '8px';
-      } else {
-        parentEl.style.border = 'none';
-        parentEl.style.padding = '0';
+      for (let j = 0; j < this.tableColumns; j++) {
+        const cell = document.createElement('td');
+        cell.className = 'table-cell';
+        cell.style.border = `${this.tableBorderWidth}px ${this.tableBorderStyle} #000`;
+        cell.style.padding = '8px';
+        cell.style.minWidth = '50px';
+        cell.style.position = 'relative';
+        
+        // Add empty content to ensure cell is editable
+        cell.innerHTML = '<br>';
+        
+        // Add click handler for cell selection
+        cell.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.selectTableCell(cell);
+        });
+        
+        row.appendChild(cell);
       }
       
-      this.notify(`Border ${this.showBorder ? 'added' : 'removed'}`, 'success');
-      this.saveCurrentPageContent();
+      tbody.appendChild(row);
     }
+    
+    table.appendChild(tbody);
+    
+    // Create container for the table
+    const tableContainer = document.createElement('div');
+    tableContainer.className = 'editor-table-container';
+    tableContainer.appendChild(table);
+    
+    // Add handler to make the table draggable
+    table.addEventListener('mousedown', (e) => {
+      if (e.target === table || (e.target as HTMLElement).tagName === 'TABLE') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.selectObject(table, 'table');
+        this.startDrag(e, table);
+      }
+    });
+    
+    // Create paragraph for table (for proper spacing)
+    const tableParagraph = document.createElement('p');
+    tableParagraph.appendChild(tableContainer);
+    
+    // Insert at cursor position or at end
+    this.insertContentAtCursor(tableParagraph);
+    
+    // Register the new table
+    this.registerTableObject(table);
+    
+    // Close modal
+    this.showTableModal = false;
+    
+    // Notify success
+    this.notify(`Table with ${this.tableRows} rows and ${this.tableColumns} columns added`, 'success');
+    
+    // Save current page content
+    this.saveCurrentPageContent();
   }
 
-  /**
-   * Set border style for the selected element or current paragraph
-   */
-  setBorderStyle(event: Event): void {
-    const select = event.target as HTMLSelectElement;
-    if (!select?.value) return;
+  // ===== LINE & IMAGE CREATION =====
+
+  addHorizontalLine(): void {
+    this.createLine('horizontal');
+  }
+  
+  addVerticalLine(): void {
+    this.createLine('vertical');
+  }
+  
+  createLine(orientation: 'horizontal' | 'vertical'): void {
+    this.saveToHistory();
     
-    this.currentBorderStyle = select.value;
+    if (!this.canvasContent?.nativeElement) return;
     
-    // If border is not currently shown, don't apply anything
-    if (!this.showBorder) return;
+    // Focus the editor first
+    this.canvasContent.nativeElement.focus();
     
-    if (!this.isSelectionInEditor()) {
-      this.canvasContent.nativeElement.focus();
+    // Create line container
+    const lineContainer = document.createElement('div');
+    lineContainer.className = 'line-container';
+    lineContainer.setAttribute('data-orientation', orientation);
+    lineContainer.setAttribute('data-thickness', this.lineThickness.toString());
+    lineContainer.setAttribute('data-color', this.lineColor);
+    
+    // Create the line element
+    const lineElement = document.createElement('div');
+    lineElement.className = 'editor-line';
+    
+    if (orientation === 'horizontal') {
+      lineElement.style.width = '200px';
+      lineElement.style.height = `${this.lineThickness}px`;
+    } else {
+      lineElement.style.height = '200px';
+      lineElement.style.width = `${this.lineThickness}px`;
     }
     
-    // Get the current selection or current paragraph
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
+    lineElement.style.backgroundColor = this.lineColor;
     
-    const range = selection.getRangeAt(0);
-    const parentEl = this.getClosestBlock(range.startContainer);
+    // Add the line to the container
+    lineContainer.appendChild(lineElement);
     
-    if (parentEl) {
-      this.saveToHistory();
-      parentEl.style.border = `1px ${this.currentBorderStyle} #000`;
+    // Create paragraph for the line (for proper spacing)
+    const lineParagraph = document.createElement('p');
+    lineParagraph.className = 'line-paragraph';
+    lineParagraph.appendChild(lineContainer);
+    
+    // Insert at cursor position or at end
+    this.insertContentAtCursor(lineParagraph);
+    
+    // Register the new line
+    this.registerLineObject(lineContainer);
+    this.selectObject(lineContainer, 'line', orientation);
+    
+    // Setup handlers for the new container
+    this.setupObjectHandlers();
+    
+    // Notify success
+    this.notify(`${orientation} line added successfully`, 'success');
+    
+    // Save current page content
+    this.saveCurrentPageContent();
+  }
+  
+  uploadImage(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    
+    if (!file) {
+      this.notify('No file selected', 'warning');
+      return;
+    }
+    
+    // Only allow image files
+    if (!file.type.startsWith('image/')) {
+      this.notify('Please select a valid image file', 'error');
+      return;
+    }
+    
+    this.saveToHistory();
+    
+    // Store current selection/cursor position
+    let selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      this.range = selection.getRangeAt(0).cloneRange();
+    }
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      if (!this.canvasContent?.nativeElement) return;
       
-      this.notify(`Border style updated to ${this.currentBorderStyle}`, 'success');
-      this.saveCurrentPageContent();
+      // Focus the editor
+      this.canvasContent.nativeElement.focus();
+      
+      // Create image element
+      const img = document.createElement('img');
+      img.src = e.target?.result as string;
+      img.className = 'editor-image';
+      img.style.maxWidth = '100%';
+      img.alt = file.name;
+      
+      // Ensure image is properly loaded
+      img.onload = () => {
+        // Create image container
+        const imgContainer = document.createElement('div');
+        imgContainer.className = 'img-container';
+        imgContainer.style.position = 'relative';
+        imgContainer.style.display = 'inline-block';
+        imgContainer.appendChild(img);
+        
+        // Add click handler for selection
+        imgContainer.addEventListener('click', (evt) => {
+          evt.stopPropagation();
+          this.selectObject(imgContainer, 'image');
+        });
+        
+        // Add mousedown handler for dragging
+        imgContainer.addEventListener('mousedown', (evt) => {
+          if (this.isResizing || this.isRotating) return;
+          if (evt.target === imgContainer || (evt.target as HTMLElement).tagName === 'IMG') {
+            evt.preventDefault();
+            this.startDrag(evt, imgContainer);
+          }
+        });
+        
+        // Create paragraph for image
+        const imgParagraph = document.createElement('p');
+        imgParagraph.className = 'image-paragraph';
+        imgParagraph.appendChild(imgContainer);
+        
+        // Insert at cursor position or at end
+        this.insertContentAtCursor(imgParagraph, this.range);
+        
+        // Register the new image
+        this.registerImageObject(imgContainer);
+        this.selectObject(imgContainer, 'image');
+        
+        // Close modal
+        this.showImageModal = false;
+        
+        this.notify('Image added successfully', 'success');
+        this.saveCurrentPageContent();
+      };
+    };
+    
+    reader.readAsDataURL(file);
+  }
+
+  insertContentAtCursor(content: HTMLElement, customRange?: Range | null): void {
+    // Use the stored range if available, otherwise use current selection
+    let insertRange = customRange;
+    if (!insertRange) {
+      const currentSelection = window.getSelection();
+      if (currentSelection && currentSelection.rangeCount > 0) {
+        insertRange = currentSelection.getRangeAt(0);
+      }
+    }
+    
+    if (insertRange) {
+      // Insert at cursor position
+      insertRange.deleteContents();
+      insertRange.insertNode(content);
+      
+      // Create a new paragraph after the content
+      const afterParagraph = document.createElement('p');
+      afterParagraph.innerHTML = '<br>';
+      
+      // Insert the paragraph after the content
+      content.parentNode?.insertBefore(afterParagraph, content.nextSibling);
+      
+      // Move cursor to the new paragraph
+      const newRange = document.createRange();
+      newRange.setStart(afterParagraph, 0);
+      newRange.collapse(true);
+      
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+      }
+    } else if (this.canvasContent && this.canvasContent.nativeElement) {
+      // If no range available, append to the end
+      this.canvasContent.nativeElement.appendChild(content);
+      
+      const afterParagraph = document.createElement('p');
+      afterParagraph.innerHTML = '<br>';
+      this.canvasContent.nativeElement.appendChild(afterParagraph);
+      
+      // Move cursor to the new paragraph
+      const newRange = document.createRange();
+      newRange.setStart(afterParagraph, 0);
+      newRange.collapse(true);
+      
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+      }
     }
   }
 
-  /**
-   * Get the closest block element parent
-   */
-  getClosestBlock(node: Node): HTMLElement | null {
-    // Handle null node
-    if (!node) return null;
-    
-    // Find the first element node going up the tree
-    let current: Node | null = node;
-    while (current && current.nodeType !== Node.ELEMENT_NODE) {
-      // Add explicit type annotation to parentNode
-      const parentNode: ParentNode | null = current.parentNode;
-      if (!parentNode) break; // Handle null parent
-      current = parentNode;
-    }
-    
-    // If we didn't find an element, return null
-    if (!current || current.nodeType !== Node.ELEMENT_NODE) {
-      return null;
-    }
-    
-    // Find the closest block element
-    let element = current as HTMLElement;
-    while (element && 
-          element !== this.canvasContent.nativeElement && 
-          getComputedStyle(element).display !== 'block') {
-      const parentElement: HTMLElement | null = element.parentElement;
-      if (!parentElement) break; // Handle null parent
-      element = parentElement;
-    }
-    
-    if (!element || element === this.canvasContent.nativeElement) {
-      return null;
-    }
-    
-    return element;
-  }
-
-  /**
-   * Insert a field placeholder at the current cursor position
-   */
+  // ===== FIELD INSERTION =====
+  
   insertField(event: Event): void {
     const select = event.target as HTMLSelectElement;
     if (!select?.value) return;
@@ -805,8 +2021,8 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     this.notify(`Field ${fieldName} inserted`, 'success');
     this.saveCurrentPageContent();
   }
-
-  // ====== HISTORY MANAGEMENT ======
+  
+  // ===== HISTORY & UTILITY =====
   
   saveToHistory(): void {
     if (!this.canvasContent) return;
@@ -815,6 +2031,7 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
     this.undoStack.push(currentState);
     this.redoStack = [];
     
+    // Limit history size
     if (this.undoStack.length > 20) {
       this.undoStack.shift();
     }
@@ -853,665 +2070,248 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
       this.notify('Redo successful', 'success');
     }
   }
-  
-  // ====== OBJECT MANAGEMENT ======
-  
+
   generateId(): string {
     return `obj-${this.nextId++}`;
   }
   
-  // ====== LINE CREATION ======
-  
-  addHorizontalLine(): void {
-    this.createLine('horizontal');
-  }
-  
-  addVerticalLine(): void {
-    this.createLine('vertical');
-  }
-  
-  createLine(orientation: 'horizontal' | 'vertical'): void {
-    // Save current state for undo
-    this.saveToHistory();
+  adjustZoom(amount: number): void {
+    const oldZoom = this.zoom;
+    this.zoom = Math.max(10, Math.min(200, this.zoom + amount));
     
-    if (!this.canvasContent?.nativeElement) return;
-    
-    // Focus the editor first
-    this.canvasContent.nativeElement.focus();
-    
-    // Create line container
-    const lineContainer = document.createElement('div');
-    lineContainer.className = 'line-container';
-    lineContainer.setAttribute('data-orientation', orientation);
-    lineContainer.setAttribute('data-thickness', this.lineThickness.toString());
-    lineContainer.setAttribute('data-color', this.lineColor);
-    
-    // Create the line element
-    const lineElement = document.createElement('div');
-    lineElement.className = 'editor-line';
-    
-    if (orientation === 'horizontal') {
-      lineElement.style.width = '200px';
-      lineElement.style.height = `${this.lineThickness}px`;
-    } else {
-      lineElement.style.height = '200px';
-      lineElement.style.width = `${this.lineThickness}px`;
-    }
-    
-    lineElement.style.backgroundColor = this.lineColor;
-    
-    // Add the line to the container
-    lineContainer.appendChild(lineElement);
-    
-    // Create paragraph for the line (for proper spacing)
-    const lineParagraph = document.createElement('p');
-    lineParagraph.className = 'line-paragraph';
-    lineParagraph.appendChild(lineContainer);
-    
-    // Handle insertions at selection or at end
-    if (this.isSelectionInEditor() && this.range) {
-      // Insert at current selection
-      this.range.deleteContents();
-      this.range.insertNode(lineParagraph);
-      
-      // Create a new paragraph after the line if needed
-      const afterParagraph = document.createElement('p');
-      afterParagraph.innerHTML = '<br>';
-      
-      // Insert the paragraph after the line paragraph
-      lineParagraph.parentNode?.insertBefore(afterParagraph, lineParagraph.nextSibling);
-      
-      // Move cursor to the new paragraph
-      const newRange = document.createRange();
-      newRange.setStart(afterParagraph, 0);
-      newRange.collapse(true);
-      
-      const selection = window.getSelection();
-      if (selection) {
-        selection.removeAllRanges();
-        selection.addRange(newRange);
-      }
-    } else {
-      // If no selection, append to the end
-      this.canvasContent.nativeElement.appendChild(lineParagraph);
-      
-      // Also add a paragraph after the line
-      const afterParagraph = document.createElement('p');
-      afterParagraph.innerHTML = '<br>';
-      this.canvasContent.nativeElement.appendChild(afterParagraph);
-      
-      // Move cursor to the new paragraph
-      const newRange = document.createRange();
-      newRange.setStart(afterParagraph, 0);
-      newRange.collapse(true);
-      
-      const selection = window.getSelection();
-      if (selection) {
-        selection.removeAllRanges();
-        selection.addRange(newRange);
-      }
-    }
-    
-    // Create a new line object and add it to our objects array
-    const rect = lineContainer.getBoundingClientRect();
-    const newLineObj: LineObject = {
-      id: this.generateId(),
-      type: 'line',
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-      zIndex: this.objects.length + 1,
-      rotation: 0,
-      orientation,
-      thickness: this.lineThickness,
-      color: this.lineColor,
-      element: lineContainer
-    };
-    
-    this.objects.push(newLineObj);
-    this.selectObject(lineContainer, 'line', orientation);
-    
-    // Setup object handlers for the new container
-    this.setupObjectHandlers();
-    
-    // Notify success
-    this.notify(`${orientation} line added successfully`, 'success');
-    
-    // Save current page content
-    this.saveCurrentPageContent();
-  }
-  
-  // ====== OBJECT SELECTION ======
-  
-  selectObject(element: HTMLElement, type: string, orientation?: 'horizontal' | 'vertical'): void {
-    // Find the corresponding object
-    const obj = this.objects.find(o => o.element === element);
-    
-    if (obj) {
-      this.selectedObject = obj;
-      
-      // Add selected class to the element
-      element.classList.add('selected');
-      
-      // Remove selected class from all other elements
-      if (type === 'image') {
-        const allContainers = this.canvasContent.nativeElement.querySelectorAll('.img-container');
-        allContainers.forEach((el: HTMLElement) => {
-          if (el !== element) {
-            el.classList.remove('selected');
-          }
-        });
-      } else if (type === 'line') {
-        const allContainers = this.canvasContent.nativeElement.querySelectorAll('.line-container');
-        allContainers.forEach((el: HTMLElement) => {
-          if (el !== element) {
-            el.classList.remove('selected');
-          }
-        });
-      }
-      
-      // Update the position of resize handlers after selection
+    // If zoom changed and something is selected, update handlers
+    if (oldZoom !== this.zoom && this.selectedObject) {
       setTimeout(() => this.updateResizeHandlersPosition(), 0);
     }
   }
   
-  /**
-   * Updates the position of resize handlers to match the selected object
-   */
-  updateResizeHandlersPosition(): void {
-    if (!this.selectedObject || !this.selectedObject.element) return;
-    
-    const element = this.selectedObject.element;
-    const rect = element.getBoundingClientRect();
-    
-    // Get the resize controls container
-    const resizeControls = document.querySelector('.resize-controls') as HTMLElement;
-    if (!resizeControls) return;
-    
-    // Position the resize controls container to match the selected element
-    resizeControls.style.top = rect.top + 'px';
-    resizeControls.style.left = rect.left + 'px';
-    resizeControls.style.width = rect.width + 'px';
-    resizeControls.style.height = rect.height + 'px';
-    
-    // Consider object's rotation if any
-    if (this.selectedObject.rotation) {
-      resizeControls.style.transform = `rotate(${this.selectedObject.rotation}deg)`;
-      resizeControls.style.transformOrigin = 'center center';
-    } else {
-      resizeControls.style.transform = '';
+  // ===== EXPORT AND NOTIFICATION =====
+  
+  updateExportDetails(): void {
+    switch(this.exportFormat) {
+      case 'html':
+        this.exportDetails = "HTML format exports the complete content as a web page with all formatting, styles, and images preserved.";
+        break;
+      case 'txt':
+        this.exportDetails = "Plain text format that preserves only the text content without formatting.";
+        break;
+      case 'pdf':
+        this.exportDetails = "PDF format for high-quality print documents that preserves all formatting, styles, and images exactly as they appear in the editor.";
+        break;
     }
   }
   
-  // ====== IMAGE HANDLING ======
-  
-  uploadImage(event: Event): void {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    
-    if (!file) {
-      this.notify('No file selected', 'warning');
-      return;
-    }
-    
-    // Only allow image files
-    if (!file.type.startsWith('image/')) {
-      this.notify('Please select a valid image file', 'error');
-      return;
-    }
-    
-    // Save current state for undo
-    this.saveToHistory();
-    
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      if (!this.canvasContent?.nativeElement) return;
-      
-      // Focus the editor first
-      this.canvasContent.nativeElement.focus();
-      
-      // Create image element
-      const img = document.createElement('img');
-      img.src = e.target?.result as string;
-      img.className = 'editor-image';
-      img.style.maxWidth = '100%';
-      img.alt = file.name;
-      
-      // Ensure image is properly loaded
-      img.onload = () => {
-        // Create image container
-        const imgContainer = document.createElement('div');
-        imgContainer.className = 'img-container';
-        imgContainer.style.position = 'relative'; // Make sure position is set for drag and resize
-        imgContainer.appendChild(img);
-        
-        // Add click handler for selection
-        imgContainer.addEventListener('click', (evt) => {
-          evt.stopPropagation();
-          this.selectObject(imgContainer, 'image');
-        });
-        
-        // Add mousedown handler for dragging
-        imgContainer.addEventListener('mousedown', (evt) => {
-          if (this.isResizing || this.isRotating) return;
-          if (evt.target === imgContainer || (evt.target as HTMLElement).tagName === 'IMG') {
-            evt.preventDefault(); // Prevent text selection during drag
-            this.startDrag(evt, imgContainer);
-          }
-        });
-        
-        // Create paragraph for image (this is critical for proper spacing)
-        const imgParagraph = document.createElement('p');
-        imgParagraph.className = 'image-paragraph';
-        imgParagraph.appendChild(imgContainer);
-        
-        // Handle insertions at selection or at end
-        if (this.isSelectionInEditor() && this.range) {
-          // Insert at current selection
-          this.range.deleteContents();
-          this.range.insertNode(imgParagraph);
-          
-          // Create a new paragraph after the image if needed
-          const afterParagraph = document.createElement('p');
-          afterParagraph.innerHTML = '<br>';
-          
-          // Insert the paragraph after the image paragraph
-          imgParagraph.parentNode?.insertBefore(afterParagraph, imgParagraph.nextSibling);
-          
-          // Move cursor to the new paragraph
-          const newRange = document.createRange();
-          newRange.setStart(afterParagraph, 0);
-          newRange.collapse(true);
-          
-          const selection = window.getSelection();
-          if (selection) {
-            selection.removeAllRanges();
-            selection.addRange(newRange);
-          }
-        } else {
-          // If no selection, append to the end
-          this.canvasContent.nativeElement.appendChild(imgParagraph);
-          
-          // Also add a paragraph after the image
-          const afterParagraph = document.createElement('p');
-          afterParagraph.innerHTML = '<br>';
-          this.canvasContent.nativeElement.appendChild(afterParagraph);
-          
-          // Move cursor to the new paragraph
-          const newRange = document.createRange();
-          newRange.setStart(afterParagraph, 0);
-          newRange.collapse(true);
-          
-          const selection = window.getSelection();
-          if (selection) {
-            selection.removeAllRanges();
-            selection.addRange(newRange);
-          }
-        }
-        
-        // Create a new image object and add it to our objects array
-        const rect = imgContainer.getBoundingClientRect();
-        const newImageObj: ImageObject = {
-          id: this.generateId(),
-          type: 'image',
-          x: 0, // Will be set by position styles
-          y: 0, // Will be set by position styles
-          width: rect.width,
-          height: rect.height,
-          zIndex: this.objects.length + 1,
-          rotation: 0,
-          src: img.src,
-          element: imgContainer
-        };
-        
-        this.objects.push(newImageObj);
-        this.selectObject(imgContainer, 'image');
-        
-        // Close modal
-        this.showImageModal = false;
-        
-        // Notify success
-        this.notify('Image added successfully', 'success');
-        
-        // Save current page content
-        this.saveCurrentPageContent();
-      };
-    };
-    
-    reader.readAsDataURL(file);
+  downloadExport(): void {
+    this.notify('Export functionality will be implemented in future updates', 'warning');
+    this.showExportModal = false;
   }
   
-  // ====== DRAGGING FUNCTIONALITY ======
-  
-  startDrag(e: MouseEvent, element: HTMLElement): void {
-    e.preventDefault();
-    e.stopPropagation();
+  notify(message: string, type: 'success' | 'warning' | 'error'): void {
+    this.notification = message;
+    this.notificationType = type;
+    this.showNotification = true;
     
-    // Find the corresponding object
-    const obj = this.objects.find(o => o.element === element);
-    if (!obj) return;
-    
-    // Select this object
-    if (obj.type === 'image') {
-      this.selectObject(element, 'image');
-    } else if (obj.type === 'line') {
-      const orientation = element.getAttribute('data-orientation') as 'horizontal' | 'vertical';
-      this.selectObject(element, 'line', orientation);
-    }
-    
-    // Make sure the element has position: relative
-    if (!element.style.position || element.style.position !== 'relative') {
-      element.style.position = 'relative';
-    }
-    
-    // Store drag start information
-    this.isDragging = true;
-    this.dragStartX = e.clientX;
-    this.dragStartY = e.clientY;
-    
-    // Get current position from style
-    let left = parseInt(element.style.left || '0', 10);
-    let top = parseInt(element.style.top || '0', 10);
-    
-    this.dragStartObjX = left;
-    this.dragStartObjY = top;
-    
-    // Add dragging class
-    element.classList.add('dragging');
+    setTimeout(() => {
+      this.showNotification = false;
+    }, 3000);
   }
-  
-  // ====== RESIZING FUNCTIONALITY ======
-  
-  startResize(e: MouseEvent, handle: string): void {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    if (!this.selectedObject || !this.selectedObject.element) return;
-    
-    // Initialize resizing state
-    this.isResizing = true;
-    this.resizeHandle = handle;
-    this.resizeStartX = e.clientX;
-    this.resizeStartY = e.clientY;
-    
-    const rect = this.selectedObject.element.getBoundingClientRect();
-    this.resizeStartWidth = rect.width;
-    this.resizeStartHeight = rect.height;
-    
-    // Add resizing class to the element
-    this.selectedObject.element.classList.add('resizing');
-  }
-  
-  // ====== ROTATION FUNCTIONALITY ======
-  
-  startRotate(e: MouseEvent): void {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    if (!this.selectedObject || !this.selectedObject.element) return;
-    
-    // Initialize rotation state
-    this.isRotating = true;
-    
-    // Calculate center of object
-    const rect = this.selectedObject.element.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    
-    // Calculate initial angle
-    const angleRadians = Math.atan2(e.clientY - centerY, e.clientX - centerX);
-    this.rotateStartAngle = (angleRadians * 180 / Math.PI);
-    
-    // Store current rotation
-    this.rotateStartX = this.selectedObject.rotation || 0;
-  }
-  
-  // ====== MOUSE MOVE HANDLER ======
-  
-  handleMouseMove = (e: MouseEvent): void => {
-    if (this.isDragging && this.selectedObject && this.selectedObject.element) {
-      // Calculate the new position
-      const deltaX = e.clientX - this.dragStartX;
-      const deltaY = e.clientY - this.dragStartY;
-      
-      const newX = this.dragStartObjX + deltaX;
-      const newY = this.dragStartObjY + deltaY;
-      
-      // Update the element's position
-      const element = this.selectedObject.element;
-      element.style.position = 'relative';
-      element.style.left = `${newX}px`;
-      element.style.top = `${newY}px`;
-      
-      // Update object coordinates
-      this.selectedObject.x = newX;
-      this.selectedObject.y = newY;
-      
-      // Update resize handlers position
-      this.updateResizeHandlersPosition();
-      
-    } else if (this.isResizing && this.selectedObject && this.selectedObject.element) {
-      // Calculate the deltas
-      const deltaX = e.clientX - this.resizeStartX;
-      const deltaY = e.clientY - this.resizeStartY;
-      
-      // Get the element
-      const element = this.selectedObject.element;
-      let newWidth = this.resizeStartWidth;
-      let newHeight = this.resizeStartHeight;
-      let leftOffset = parseInt(element.style.left || '0', 10);
-      let topOffset = parseInt(element.style.top || '0', 10);
-      
-      if (this.selectedObject.type === 'image') {
-        const img = element.querySelector('img');
-        if (!img) return;
-        
-        // Handle each resize direction
-        switch(this.resizeHandle) {
-          case 'se':
-            newWidth = Math.max(50, this.resizeStartWidth + deltaX);
-            newHeight = Math.max(50, this.resizeStartHeight + deltaY);
-            break;
-          case 'sw':
-            newWidth = Math.max(50, this.resizeStartWidth - deltaX);
-            newHeight = Math.max(50, this.resizeStartHeight + deltaY);
-            leftOffset = parseInt(element.style.left || '0', 10) + deltaX;
-            break;
-          case 'ne':
-            newWidth = Math.max(50, this.resizeStartWidth + deltaX);
-            newHeight = Math.max(50, this.resizeStartHeight - deltaY);
-            topOffset = parseInt(element.style.top || '0', 10) + deltaY;
-            break;
-          case 'nw':
-            newWidth = Math.max(50, this.resizeStartWidth - deltaX);
-            newHeight = Math.max(50, this.resizeStartHeight - deltaY);
-            leftOffset = parseInt(element.style.left || '0', 10) + deltaX;
-            topOffset = parseInt(element.style.top || '0', 10) + deltaY;
-            break;
-          case 'n':
-            newHeight = Math.max(50, this.resizeStartHeight - deltaY);
-            topOffset = parseInt(element.style.top || '0', 10) + deltaY;
-            break;
-          case 's':
-            newHeight = Math.max(50, this.resizeStartHeight + deltaY);
-            break;
-          case 'e':
-            newWidth = Math.max(50, this.resizeStartWidth + deltaX);
-            break;
-          case 'w':
-            newWidth = Math.max(50, this.resizeStartWidth - deltaX);
-            leftOffset = parseInt(element.style.left || '0', 10) + deltaX;
-            break;
-        }
-        
-        // Ensure element has position relative
-        element.style.position = 'relative';
-        
-        // Update element position
-        element.style.left = `${leftOffset}px`;
-        element.style.top = `${topOffset}px`;
-        
-        // Update the image size with the bounded values
-        img.style.width = `${newWidth}px`;
-        img.style.height = `${newHeight}px`;
-        
-      } else if (this.selectedObject.type === 'line') {
-        const line = element.querySelector('.editor-line') as HTMLElement;
-        if (!line) return;
-        
-        // Get line orientation
-        const orientation = (this.selectedObject as LineObject).orientation;
-        
-        if (orientation === 'horizontal') {
-          // For horizontal line, only resize width
-          switch(this.resizeHandle) {
-            case 'e':
-            case 'ne':
-            case 'se':
-              newWidth = Math.max(20, this.resizeStartWidth + deltaX);
-              break;
-            case 'w':
-            case 'nw':
-            case 'sw':
-              newWidth = Math.max(20, this.resizeStartWidth - deltaX);
-              leftOffset = parseInt(element.style.left || '0', 10) + deltaX;
-              break;
-          }
-          
-          // Ensure element has position relative
-          element.style.position = 'relative';
-          
-          // Update element position
-          element.style.left = `${leftOffset}px`;
-          
-          // Set new width
-          line.style.width = `${newWidth}px`;
-          // Reset height to maintain thickness
-          line.style.height = `${(this.selectedObject as LineObject).thickness}px`;
-          
-        } else {
-          // For vertical line, only resize height
-          switch(this.resizeHandle) {
-            case 'n':
-            case 'ne':
-            case 'nw':
-              newHeight = Math.max(20, this.resizeStartHeight - deltaY);
-              topOffset = parseInt(element.style.top || '0', 10) + deltaY;
-              break;
-            case 's':
-            case 'se':
-            case 'sw':
-              newHeight = Math.max(20, this.resizeStartHeight + deltaY);
-              break;
-          }
-          
-          // Ensure element has position relative
-          element.style.position = 'relative';
-          
-          // Update element position
-          element.style.top = `${topOffset}px`;
-          
-          // Set new height
-          line.style.height = `${newHeight}px`;
-          // Reset width to maintain thickness
-          line.style.width = `${(this.selectedObject as LineObject).thickness}px`;
-        }
-      }
-      
-      // Update object dimensions and position in the objects array
-      this.selectedObject.width = newWidth;
-      this.selectedObject.height = newHeight;
-      this.selectedObject.x = leftOffset;
-      this.selectedObject.y = topOffset;
-      
-      // Update resize handlers position
-      this.updateResizeHandlersPosition();
-      
-    } else if (this.isRotating && this.selectedObject && this.selectedObject.element) {
-      // Calculate center of object
-      const rect = this.selectedObject.element.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
-      
-      // Calculate current angle
-      const angleRadians = Math.atan2(e.clientY - centerY, e.clientX - centerX);
-      const currentAngle = (angleRadians * 180 / Math.PI);
-      
-      // Calculate rotation change
-      const angleDelta = currentAngle - this.rotateStartAngle;
-      let newRotation = ((this.rotateStartX + angleDelta) % 360 + 360) % 360;
-      
-      // Apply rotation to element
-      this.selectedObject.element.style.transform = `rotate(${newRotation}deg)`;
-      
-      // Update object rotation
-      this.selectedObject.rotation = newRotation;
-      
-      // Update resize handlers position and rotation
-      this.updateResizeHandlersPosition();
-    }
-  };
-  
-  // ====== MOUSE UP HANDLER ======
-  
-  handleMouseUp = (e: MouseEvent): void => {
-    if (this.isDragging || this.isResizing || this.isRotating) {
-      // End the operation
-      if (this.selectedObject && this.selectedObject.element) {
-        // Remove special classes
-        this.selectedObject.element.classList.remove('dragging', 'resizing');
-        
-        // Update resize handlers position one final time
-        this.updateResizeHandlersPosition();
-      }
-      
-      this.isDragging = false;
-      this.isResizing = false;
-      this.isRotating = false;
-      
-      // Save state for undo
-      this.saveToHistory();
-      this.saveCurrentPageContent();
-    }
-  };
 
-  // ====== KEYBOARD SHORTCUTS ======
+  // ===== PRINTING =====
+  
+  printCanvas(): void {
+    // First save current content
+    this.saveCurrentPageContent();
+    
+    // Create a new window for printing
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      this.notify('Please allow popups to print', 'warning');
+      return;
+    }
+    
+    // Create document content with styles
+    const styles = `
+      <style>
+        body {
+          margin: 0;
+          padding: 0;
+          font-family: ${this.currentFontFamily}, sans-serif;
+        }
+        
+        .print-page {
+          width: 210mm;
+          min-height: 297mm;
+          padding: 15mm;
+          margin: 10mm auto;
+          background: white;
+          box-shadow: 0 0 5mm rgba(0,0,0,0.1);
+          position: relative;
+          box-sizing: border-box;
+        }
+        
+        .img-container, .line-container, .editor-table {
+          page-break-inside: avoid;
+        }
+        
+        .print-page img {
+          max-width: 100%;
+        }
+        
+        @media print {
+          body {
+            background: none;
+          }
+          
+          .print-page {
+            margin: 0;
+            box-shadow: none;
+            padding: ${this.documentForm.get('marginTop')?.value || 1.27}cm 
+                      ${this.documentForm.get('marginRight')?.value || 1.27}cm 
+                      ${this.documentForm.get('marginBottom')?.value || 1.27}cm 
+                      ${this.documentForm.get('marginLeft')?.value || 1.27}cm;
+          }
+          
+          .print-page + .print-page {
+            page-break-before: always;
+          }
+        }
+      </style>
+    `;
+    
+    // Generate all pages content
+    let pagesContent = '';
+    this.pages.forEach(page => {
+      // Fix relative positions and paths for printing
+      const fixedContent = this.prepareContentForPrinting(page.content);
+      
+      // Add border to page if enabled
+      let pageStyle = '';
+      if (page.hasBorder) {
+        pageStyle = `style="border: ${page.borderWidth || 1}px ${page.borderStyle || 'solid'} ${page.borderColor || '#000000'};"`;
+      }
+      
+      pagesContent += `<div class="print-page" ${pageStyle}>${fixedContent}</div>`;
+    });
+    
+    // Write to the print window
+    printWindow.document.open();
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Print Document</title>
+        ${styles}
+        <!-- Import fonts -->
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Montserrat:wght@400;500;700&display=swap">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;500;700&family=Catamaran:wght@400;500;700&display=swap">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;500;700&family=Baloo+Tammudu+2:wght@400;500;700&display=swap">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Malayalam:wght@400;500;700&family=Manjari:wght@400;700&display=swap">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;700&family=Poppins:wght@400;500;700&family=Hind:wght@400;500;700&display=swap">
+      </head>
+      <body>
+        ${pagesContent}
+        <script>
+          window.onload = function() {
+            window.setTimeout(function() {
+              window.print();
+            }, 500);
+          }
+        </script>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+  }
+
+  prepareContentForPrinting(content: string): string {
+    // Create a temporary DOM element to fix content
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = content;
+    
+    // Fix images, lines, and tables for printing
+    this.fixObjectsForPrinting(tempDiv, 'img-container');
+    this.fixObjectsForPrinting(tempDiv, 'line-container');
+    this.fixObjectsForPrinting(tempDiv, 'editor-table');
+    
+    // Remove any resize or selection controls
+    const controls = tempDiv.querySelectorAll('.resize-controls, .table-cell-resize-controls');
+    controls.forEach(control => control.remove());
+    
+    // Remove selected class from any elements
+    const selectedElements = tempDiv.querySelectorAll('.selected');
+    selectedElements.forEach(el => el.classList.remove('selected'));
+    
+    return tempDiv.innerHTML;
+  }
+
+  fixObjectsForPrinting(container: HTMLElement, selector: string): void {
+    const elements = container.querySelectorAll(`.${selector}`);
+    
+    elements.forEach(element => {
+      const computedStyle = window.getComputedStyle(element as HTMLElement);
+      
+      // Handle position
+      if (computedStyle.position === 'relative') {
+        const left = parseInt(computedStyle.left || '0', 10);
+        const top = parseInt(computedStyle.top || '0', 10);
+        
+        if (left !== 0 || top !== 0) {
+          (element as HTMLElement).style.position = 'absolute';
+          (element as HTMLElement).style.left = `${left}px`;
+          (element as HTMLElement).style.top = `${top}px`;
+        }
+      }
+      
+      // Handle rotation
+      const transform = computedStyle.transform;
+      if (transform && transform !== 'none') {
+        (element as HTMLElement).style.transform = transform;
+      }
+    });
+  }
+
+  // ===== KEYBOARD SHORTCUTS =====
   
   @HostListener('window:keydown', ['$event'])
   onKeyDown(e: KeyboardEvent): void {
-    // Ctrl+Z for undo
-    if (e.ctrlKey && e.key === 'z') {
+    // Common keyboard shortcuts
+    if (e.ctrlKey) {
+      switch (e.key) {
+        case 'z':
+          e.preventDefault();
+          this.undo();
+          break;
+        case 'y':
+          e.preventDefault();
+          this.redo();
+          break;
+        case 'b':
+          e.preventDefault();
+          this.toggleBold();
+          break;
+        case 'i':
+          e.preventDefault();
+          this.toggleItalic();
+          break;
+        case 'u':
+          e.preventDefault();
+          this.toggleUnderline();
+          break;
+        case 'p':
+          e.preventDefault();
+          this.printCanvas();
+          break;
+      }
+    } else if (e.key === 'Tab') {
       e.preventDefault();
-      this.undo();
+      this.indent();
+    } else if (e.key === 'Delete') {
+      this.handleDeleteKey(e);
     }
-    
-    // Ctrl+Y for redo
-    if (e.ctrlKey && e.key === 'y') {
-      e.preventDefault();
-      this.redo();
-    }
-    
-    // Ctrl+B for bold
-    if (e.ctrlKey && e.key === 'b') {
-      e.preventDefault();
-      this.toggleBold();
-    }
-    
-    // Ctrl+I for italic
-    if (e.ctrlKey && e.key === 'i') {
-      e.preventDefault();
-      this.toggleItalic();
-    }
-    
-    // Ctrl+U for underline
-    if (e.ctrlKey && e.key === 'u') {
-      e.preventDefault();
-      this.toggleUnderline();
-    }
-    
-    // Delete key for selected objects
-    if (e.key === 'Delete' && this.selectedObject && this.selectedObject.element) {
+  }
+
+  handleDeleteKey(e: KeyboardEvent): void {
+    if (this.selectedObject && this.selectedObject.element) {
       e.preventDefault();
       
       // Remove the element from the DOM
@@ -1535,545 +2335,34 @@ export class AuroEditorComponent implements OnInit, AfterViewInit {
       // Save state
       this.saveToHistory();
       this.saveCurrentPageContent();
-    }
-  }
-
-  // ====== HELPER METHODS ======
-  
-  adjustZoom(amount: number): void {
-    this.zoom = Math.max(10, Math.min(200, this.zoom + amount));
-  }
-  
-  // ====== EXPORT FUNCTIONALITY ======
-  
-  updateExportDetails(): void {
-    switch(this.exportFormat) {
-      case 'html':
-        this.exportDetails = "HTML format exports the complete content as a web page with all formatting, styles, and images preserved.";
-        break;
-      case 'txt':
-        this.exportDetails = "Plain text format that preserves only the text content without formatting.";
-        break;
-      case 'pdf':
-        this.exportDetails = "PDF format for high-quality print documents that preserves all formatting, styles, and images exactly as they appear in the editor.";
-        break;
-    }
-  }
-  
-  downloadExport(): void {
-  let data = '';
-  let filename = '';
-  let mime = '';
-  
-  try {
-    // Get form name for better file naming
-    const formName = this.documentForm.get('name')?.value || 'document';
-    const sanitizedName = formName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-    
-    switch(this.exportFormat) {
-      case 'html':
-        // Save current page first
-        this.saveCurrentPageContent();
-        
-        data = this.generateHTML();
-        filename = `${sanitizedName}.html`;
-        mime = 'text/html';
-        break;
-      case 'txt':
-        // Save current page first
-        this.saveCurrentPageContent();
-        
-        // Combine all pages' plain text
-        data = this.pages.map(page => {
-          const tempDiv = document.createElement('div');
-          tempDiv.innerHTML = page.content;
-          return tempDiv.innerText;
-        }).join('\n\n--- Page Break ---\n\n');
-        
-        filename = `${sanitizedName}.txt`;
-        mime = 'text/plain';
-        break;
-      case 'pdf':
-        this.generatePDF();
-        return; // The PDF generation will handle the download
-      default:
-        this.notify('Invalid export format', 'error');
-        return;
-    }
-    
-    const blob = new Blob([data], { type: mime });
-    const url = URL.createObjectURL(blob);
-    
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
-    this.showExportModal = false;
-    this.notify('Export successful', 'success');
-  } catch (error) {
-    this.notify('Export failed: ' + (error as Error).message, 'error');
-  }
-}
-  
-  generateHTML(): string {
-  // Save current page content
-  this.saveCurrentPageContent();
-  
-  // Get form information for metadata
-  const formName = this.documentForm.get('name')?.value || 'Document';
-  const language = this.documentForm.get('language')?.value || 'english';
-  const pageLayout = this.documentForm.get('pagelayout')?.value || 'portrait';
-  
-  // Generate CSS for specific language
-  const languageClass = language !== 'english' ? language : '';
-  const languageFontFamily = this.getLanguageFontFamily(language);
-  
-  // Calculate page dimensions based on layout
-  const pageWidth = pageLayout === 'portrait' ? '794px' : '1123px';
-  const pageHeight = pageLayout === 'portrait' ? '1123px' : '794px';
-  
-  // Generate page content with preserved styles
-  const pagesContent = this.pages.map((page, index) => {
-    return `
-      <div class="editor-page" id="page-${index + 1}">
-        <div class="page-content ${languageClass}">${this.processPageContentForExport(page.content)}</div>
-        <div class="page-number">Page ${index + 1}</div>
-      </div>
-    `;
-  }).join('');
-  
-  // Create complete HTML document
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>${formName}</title>
-  <meta name="generator" content="Auro Editor">
-  <style>
-    /* Import fonts for English */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Montserrat:wght@400;500;700&display=swap');
-    
-    /* Import fonts for Tamil */
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;500;700&family=Catamaran:wght@400;500;700&display=swap');
-    
-    /* Import fonts for Telugu */
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;500;700&family=Baloo+Tammudu+2:wght@400;500;700&display=swap');
-    
-    /* Import fonts for Malayalam */
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Malayalam:wght@400;500;700&family=Manjari:wght@400;700&display=swap');
-    
-    /* Import fonts for Hindi */
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;700&family=Poppins:wght@400;500;700&family=Hind:wght@400;500;700&display=swap');
-    
-    body { 
-      margin: 0; 
-      padding: 40px; 
-      font-family: 'Inter', sans-serif;
-      background-color: #f0f0f0;
-    }
-    
-    .document-container {
-      max-width: ${pageWidth};
-      margin: 0 auto;
-    }
-    
-    .editor-page {
-      width: ${pageWidth};
-      height: ${pageHeight};
-      margin-bottom: 40px;
-      background: white;
-      position: relative;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      page-break-after: always;
-      overflow: hidden;
-    }
-    
-    .page-content {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      padding: 40px;
-      box-sizing: border-box;
-      font-family: ${languageFontFamily};
-    }
-    
-    .page-number {
-      position: absolute;
-      bottom: 10px;
-      left: 0;
-      right: 0;
-      text-align: center;
-      font-size: 12px;
-      color: #6c757d;
-    }
-    
-    /* Custom classes for each language */
-    .tamil {
-      font-family: 'Noto Sans Tamil', sans-serif;
-      line-height: 1.6;
-    }
-    
-    .telungu {
-      font-family: 'Noto Sans Telugu', sans-serif;
-      line-height: 1.6;
-    }
-    
-    .malayalam {
-      font-family: 'Noto Sans Malayalam', sans-serif;
-      line-height: 1.6;
-    }
-    
-    .hindi {
-      font-family: 'Noto Sans Devanagari', sans-serif;
-      line-height: 1.6;
-    }
-    
-    /* Editor object styles */
-    .img-container {
-      display: inline-block;
-      position: relative;
-    }
-    
-    .editor-image {
-      max-width: 100%;
-      height: auto;
-      display: block;
-    }
-    
-    .line-container {
-      display: inline-block;
-      position: relative;
-      text-align: center;
-    }
-    
-    .editor-line {
-      display: inline-block;
-      background-color: #000000;
-    }
-    
-    .field-placeholder {
-      background-color: #e9f7fb;
-      padding: 2px 4px;
-      border-radius: 3px;
-      margin: 0 2px;
-      color: #0969da;
-    }
-
-    @media print {
-      body {
-        padding: 0;
-        background-color: white;
-      }
+    } else if (this.selectedTableCell) {
+      e.preventDefault();
+      // Clear the content of the selected cell
+      this.selectedTableCell.innerHTML = '<br>';
       
-      .document-container {
-        max-width: none;
-      }
-      
-      .editor-page {
-        margin: 0;
-        box-shadow: none;
-        page-break-after: always;
-      }
-      
-      .editor-page:last-child {
-        page-break-after: avoid;
-      }
+      // Save state
+      this.saveToHistory();
+      this.saveCurrentPageContent();
     }
-  </style>
-</head>
-<body>
-  <div class="document-container">
-    ${pagesContent}
-  </div>
-  <script>
-    // Add print button
-    if (!window.location.search.includes('print=true')) {
-      const printBtn = document.createElement('button');
-      printBtn.innerText = 'Print';
-      printBtn.style.position = 'fixed';
-      printBtn.style.top = '20px';
-      printBtn.style.right = '20px';
-      printBtn.style.padding = '8px 16px';
-      printBtn.style.background = '#4361ee';
-      printBtn.style.color = 'white';
-      printBtn.style.border = 'none';
-      printBtn.style.borderRadius = '4px';
-      printBtn.style.cursor = 'pointer';
-      printBtn.addEventListener('click', () => {
-        window.print();
-      });
-      document.body.appendChild(printBtn);
-    } else {
-      // Auto print if opened with print=true parameter
-      window.addEventListener('load', () => {
-        window.print();
-      });
-    }
-  </script>
-</body>
-</html>`;
-}
-  
-  getAllPagesContent(): string {
-    return this.pages.map(page => 
-      `<div class="editor-page">${page.content}</div>`
-    ).join('');
   }
 
-  processPageContentForExport(content: string): string {
-  // Create a temporary container to process the content
-  const tempContainer = document.createElement('div');
-  tempContainer.innerHTML = content;
-  
-  // Process all image containers
-  const imgContainers = tempContainer.querySelectorAll('.img-container');
-  imgContainers.forEach(container => {
-    // Remove any editor-specific classes or attributes that shouldn't be exported
-    container.classList.remove('selected', 'dragging', 'resizing');
-    
-    // Ensure all positioning styles are preserved
-    const img = container.querySelector('img');
-    if (img) {
-      // Make sure the img has its width and height explicitly set
-      const imgRect = img.getBoundingClientRect();
-      img.style.width = `${imgRect.width}px`;
-      img.style.height = `${imgRect.height}px`;
-    }
-  });
-  
-  // Process all line containers
-  const lineContainers = tempContainer.querySelectorAll('.line-container');
-  lineContainers.forEach(container => {
-    // Remove any editor-specific classes or attributes that shouldn't be exported
-    container.classList.remove('selected', 'dragging', 'resizing');
-    
-    // Ensure all positioning styles are preserved
-    const line = container.querySelector('.editor-line');
-    if (line) {
-      // Make sure the line has its styling explicitly set
-      const orientation = container.getAttribute('data-orientation');
-      const thickness = container.getAttribute('data-thickness') || '2';
-      const color = container.getAttribute('data-color') || '#000000';
-      
-      if (orientation === 'horizontal') {
-        (line as HTMLElement).style.height = `${thickness}px`;
-      } else {
-        (line as HTMLElement).style.width = `${thickness}px`;
-      }
-      (line as HTMLElement).style.backgroundColor = color;
-    }
-  });
-  
-  return tempContainer.innerHTML;
-}
-
-/**
- * Get the font family for the specified language
- */
-getLanguageFontFamily(language: string): string {
-  switch (language) {
-    case 'tamil':
-      return "'Noto Sans Tamil', sans-serif";
-    case 'telungu':
-      return "'Noto Sans Telugu', sans-serif";
-    case 'malayalam':
-      return "'Noto Sans Malayalam', sans-serif";
-    case 'hindi':
-      return "'Noto Sans Devanagari', sans-serif";
-    case 'english':
-    default:
-      return "'Inter', sans-serif";
-  }
-}
-
-/**
- * Generate and download PDF document
- */
-generatePDF(): void {
-  // Save current page first
-  this.saveCurrentPageContent();
-  
-  // Get form name for better file naming
-  const formName = this.documentForm.get('name')?.value || 'document';
-  const sanitizedName = formName.toString().replace(/[^a-z0-9]/gi, '-').toLowerCase();
-  
-  try {
-    // We'll use html2canvas and jsPDF for PDF generation
-    // First, check if the libraries are already loaded
-    if (typeof (window as any).html2canvas === 'undefined' || typeof (window as any).jspdf === 'undefined') {
-      // Load the libraries dynamically if they're not available
-      this.loadPdfLibraries().then(() => {
-        // Once libraries are loaded, continue with PDF generation
-        this.generatePdfWithLibraries(sanitizedName);
-      }).catch(error => {
-        this.notify('Failed to load PDF libraries: ' + error.message, 'error');
-      });
-    } else {
-      // Libraries are already available, generate PDF
-      this.generatePdfWithLibraries(sanitizedName);
-    }
-  } catch (error) {
-    this.notify('PDF generation failed: ' + (error as Error).message, 'error');
-  }
-}
-
-/**
- * Load the required libraries for PDF generation
- */
-loadPdfLibraries(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // Create notification to show loading status
-    this.notify('Loading PDF generation libraries...', 'warning');
-    
-    // Load html2canvas library
-    const html2canvasScript = document.createElement('script');
-    html2canvasScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-    html2canvasScript.onload = () => {
-      // After html2canvas is loaded, load jsPDF
-      const jsPdfScript = document.createElement('script');
-      jsPdfScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-      jsPdfScript.onload = () => {
-        // Both libraries are loaded
-        this.notify('PDF libraries loaded successfully', 'success');
-        resolve();
-      };
-      jsPdfScript.onerror = () => {
-        reject(new Error('Failed to load jsPDF library'));
-      };
-      document.head.appendChild(jsPdfScript);
-    };
-    html2canvasScript.onerror = () => {
-      reject(new Error('Failed to load html2canvas library'));
-    };
-    document.head.appendChild(html2canvasScript);
-  });
-}
-
-/**
- * Generate PDF using loaded libraries
- */
-generatePdfWithLibraries(filename: string): void {
-  // First, create a temporary container with all pages
-  const tempContainer = document.createElement('div');
-  tempContainer.style.position = 'absolute';
-  tempContainer.style.top = '-9999px';
-  tempContainer.style.left = '-9999px';
-  tempContainer.style.width = '794px'; // A4 width in pixels
-  
-  // Get page layout
-  const pageLayout = this.documentForm.get('pagelayout')?.value || 'portrait';
-  
-  // Create jsPDF instance with correct orientation
-  const jspdf = (window as any).jspdf;
-  const html2canvas = (window as any).html2canvas;
-  
-  if (!jspdf || !html2canvas) {
-    this.notify('PDF libraries not loaded properly', 'error');
-    return;
-  }
-  
-  const pdf = new jspdf.jsPDF({
-    orientation: pageLayout.toString(),
-    unit: 'px',
-    format: 'a4',
-    hotfixes: ['px_scaling']
-  });
-  
-  // Process each page
-  const processPage = (pageIndex: number) => {
-    if (pageIndex >= this.pages.length) {
-      // All pages processed, save the PDF
-      pdf.save(`${filename}.pdf`);
-      document.body.removeChild(tempContainer);
-      this.showExportModal = false;
-      this.notify('PDF export successful', 'success');
-      return;
-    }
-    
-    // Update notification
-    this.notify(`Generating PDF: Processing page ${pageIndex + 1} of ${this.pages.length}`, 'warning');
-    
-    // Create page element
-    const pageElement = document.createElement('div');
-    pageElement.style.width = '794px'; // A4 width
-    pageElement.style.height = '1123px'; // A4 height
-    pageElement.style.position = 'relative';
-    pageElement.style.backgroundColor = 'white';
-    pageElement.style.padding = '40px';
-    pageElement.style.boxSizing = 'border-box';
-    pageElement.style.fontFamily = this.getLanguageFontFamily(this.currentLanguage);
-    pageElement.innerHTML = this.processPageContentForExport(this.pages[pageIndex].content);
-    
-    // Clear the container and add the current page
-    tempContainer.innerHTML = '';
-    tempContainer.appendChild(pageElement);
-    
-    // Use html2canvas to render the page
-    html2canvas(pageElement, {
-      scale: 2, // Higher scale for better quality
-      logging: false,
-      useCORS: true, // Enable CORS for images
-      allowTaint: true
-    }).then((canvas: HTMLCanvasElement) => {
-      // Add page to PDF (except first page which is added by default)
-      if (pageIndex > 0) {
-        pdf.addPage();
-      }
-      
-      // Get canvas as an image
-      const imgData = canvas.toDataURL('image/jpeg', 1.0);
-      
-      // Calculate dimensions to fit the page
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      
-      // Add the image to the PDF
-      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-      
-      // Process next page
-      processPage(pageIndex + 1);
-    }).catch((error: Error) => {
-      document.body.removeChild(tempContainer);
-      this.notify('PDF generation error: ' + error.message, 'error');
-    });
-  };
-  
-  // Start processing from the first page
-  document.body.appendChild(tempContainer);
-  processPage(0);
-}
-
-  
-  // ====== NOTIFICATION SYSTEM ======
-  
-  notify(message: string, type: 'success' | 'warning' | 'error'): void {
-    this.notification = message;
-    this.notificationType = type;
-    this.showNotification = true;
-    
-    setTimeout(() => {
-      this.showNotification = false;
-    }, 3000);
-  }
-
-  // ====== FORM SUBMISSION ======
+  // ===== FORM SUBMISSION =====
   
   onSubmit(): void {
     if (this.documentForm.valid) {
       this.saveCurrentPageContent();
       
+      // Get all pages content with borders
       const allPagesContent = this.getAllPagesContent();
       this.documentForm.patchValue({ content: allPagesContent });
 
+      // Create form data for API submission
       let finalData = {
         ...this.documentForm.value, 
         isactive: true,
       };
       
+      // Submit to API
       this.http.post('https://localhost:7092/api/forms', finalData)
       .subscribe({
         next: (response) => {
@@ -2088,5 +2377,16 @@ generatePdfWithLibraries(filename: string): void {
     } else {
       this.notify('Please fill in all required fields', 'error');
     }
+  }
+  
+  getAllPagesContent(): string {
+    return this.pages.map(page => {
+      // Add border styles if present
+      let pageStyle = '';
+      if (page.hasBorder) {
+        pageStyle = ` style="border: ${page.borderWidth || 1}px ${page.borderStyle || 'solid'} ${page.borderColor || '#000000'};"`;
+      }
+      return `<div class="editor-page"${pageStyle}>${page.content}</div>`;
+    }).join('');
   }
 }
