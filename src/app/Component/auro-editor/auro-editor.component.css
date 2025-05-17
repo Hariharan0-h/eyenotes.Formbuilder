@@ -357,6 +357,34 @@ header.collapsed {
   user-select: none;
 }
 
+/* Field Dropdown (NEW) */
+.field-dropdown {
+  position: absolute;
+  z-index: 1000;
+  background-color: white;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.field-dropdown select {
+  padding: 8px;
+  min-width: 150px;
+  border: none;
+  font-size: 14px;
+  outline: none;
+}
+
+.field-dropdown-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.field-dropdown-option:hover {
+  background-color: #e9ecef;
+}
+
 /* Canvas Container */
 .canvas-container {
   flex: 1;
@@ -527,6 +555,23 @@ header.collapsed {
   transition: border 0.2s;
 }
 
+/* Updated border style to appear at margin positions */
+.canvas-content.with-border {
+  position: relative;
+}
+
+.canvas-content.with-border::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 0;
+  box-sizing: border-box;
+}
+
 /* Empty canvas styling */
 .canvas-content:empty:before {
   content: 'Click here and start typing...';
@@ -553,6 +598,33 @@ header.collapsed {
 .canvas-content[data-language="hindi"] {
   font-family: 'Noto Sans Devanagari', sans-serif;
   line-height: 1.6;
+}
+
+/* Margin Guides */
+.margin-guides-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.margin-guide {
+  position: absolute;
+  background-color: rgba(67, 97, 238, 0.2);
+}
+
+.border-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+  z-index: 0;
 }
 
 /* Zoom Controls */

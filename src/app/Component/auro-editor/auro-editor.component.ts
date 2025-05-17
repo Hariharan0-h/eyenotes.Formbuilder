@@ -55,6 +55,7 @@ interface EditorPage {
 export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('canvasContent') canvasContent!: ElementRef;
   @ViewChild('colorInput') colorInput!: ElementRef;
+  @ViewChild('fieldDropdownSelect') fieldDropdownSelect!: ElementRef;
   
   // Form subscriptions
   private subscriptions: Subscription[] = [];
@@ -103,6 +104,11 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   tableCellResizeStartHeight = 0;
   showTableModal = false;
 
+  // Field dropdown
+  showFieldDropdown = false;
+  fieldDropdownPosition = { top: '0px', left: '0px' };
+  lastCursorPosition: Range | null = null;
+
   // Zoom level
   zoom = 100;
   
@@ -138,11 +144,6 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   // Undo/Redo history
   private undoStack: string[] = [];
   private redoStack: string[] = [];
-  
-  // Export options
-  exportFormat = 'html';
-  exportDetails = '';
-  showExportModal = false;
   
   // Notification
   notification = '';
@@ -284,6 +285,10 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     this.applyBorderToCurrentPage();
     this.canvasContent.nativeElement.focus();
     this.setupObjectHandlers();
+    
+    // Add input handler for detecting {{
+    this.canvasContent.nativeElement.addEventListener('input', this.handleCanvasInput.bind(this));
+    this.canvasContent.nativeElement.addEventListener('keyup', this.checkForFieldTrigger.bind(this));
   }
 
   adjustCanvasDimensions(): void {
@@ -569,10 +574,45 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     const element = this.canvasContent.nativeElement;
     
     if (this.showBorder) {
-      element.style.border = `${this.currentBorderWidth}px ${this.currentBorderStyle} ${this.currentBorderColor}`;
-      element.style.boxSizing = 'border-box';
+      // Get the margin values
+      const marginTop = this.documentForm.get('marginTop')?.value || 1.27;
+      const marginRight = this.documentForm.get('marginRight')?.value || 1.27;
+      const marginBottom = this.documentForm.get('marginBottom')?.value || 1.27;
+      const marginLeft = this.documentForm.get('marginLeft')?.value || 1.27;
+      
+      // Convert to pixels
+      const pxPerCm = 37.8;
+      const marginTopPx = marginTop * pxPerCm;
+      const marginRightPx = marginRight * pxPerCm;
+      const marginBottomPx = marginBottom * pxPerCm;
+      const marginLeftPx = marginLeft * pxPerCm;
+      
+      // Add the 'with-border' class for the ::after pseudo-element
+      element.classList.add('with-border');
+      
+      // Apply margin-positioned border using ::after pseudo-element
+      const borderOverlay = document.createElement('div');
+      borderOverlay.className = 'border-overlay';
+      borderOverlay.style.top = `${marginTopPx}px`;
+      borderOverlay.style.right = `${marginRightPx}px`;
+      borderOverlay.style.bottom = `${marginBottomPx}px`;
+      borderOverlay.style.left = `${marginLeftPx}px`;
+      borderOverlay.style.border = `${this.currentBorderWidth}px ${this.currentBorderStyle} ${this.currentBorderColor}`;
+      
+      // Remove existing border overlay if any
+      const existingOverlay = element.querySelector('.border-overlay');
+      if (existingOverlay) {
+        element.removeChild(existingOverlay);
+      }
+      
+      element.appendChild(borderOverlay);
     } else {
-      element.style.border = 'none';
+      // Remove border and overlay
+      element.classList.remove('with-border');
+      const existingOverlay = element.querySelector('.border-overlay');
+      if (existingOverlay) {
+        element.removeChild(existingOverlay);
+      }
     }
   }
 
@@ -1977,7 +2017,56 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  // ===== FIELD INSERTION =====
+  // ===== FIELD INSERTION AND HANDLING =====
+  
+  handleCanvasInput(event: Event): void {
+    this.closeFieldDropdown();
+    this.saveCurrentPageContent();
+  }
+
+  checkForFieldTrigger(event: KeyboardEvent): void {
+    // Only process if we're in the editor
+    if (!this.canvasContent || !this.canvasContent.nativeElement) return;
+    
+    // Get current selection
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    
+    // Only look at editor content
+    if (!this.isSelectionInEditor()) return;
+    
+    // Store cursor position for field insertion
+    this.lastCursorPosition = selection.getRangeAt(0).cloneRange();
+    
+    // Get text content before cursor
+    const range = selection.getRangeAt(0);
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(this.canvasContent.nativeElement);
+    preCaretRange.setEnd(range.endContainer, range.endOffset);
+    const textBeforeCursor = preCaretRange.toString();
+    
+    // Check if the last two characters are '{{'
+    if (textBeforeCursor.endsWith('{{')) {
+      // Calculate position for dropdown
+      const rect = range.getBoundingClientRect();
+      
+      // Position dropdown near the cursor
+      this.fieldDropdownPosition = { 
+        top: `${rect.bottom}px`, 
+        left: `${rect.left}px` 
+      };
+      
+      // Show dropdown
+      this.showFieldDropdown = true;
+      
+      // Focus the dropdown after it's rendered
+      setTimeout(() => {
+        if (this.fieldDropdownSelect) {
+          this.fieldDropdownSelect.nativeElement.focus();
+        }
+      }, 10);
+    }
+  }
   
   insertField(event: Event): void {
     const select = event.target as HTMLSelectElement;
@@ -2020,6 +2109,61 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     
     this.notify(`Field ${fieldName} inserted`, 'success');
     this.saveCurrentPageContent();
+  }
+  
+  insertFieldFromDropdown(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    if (!select?.value) return;
+    
+    const fieldName = select.value;
+    
+    this.saveToHistory();
+    
+    // Use the last stored cursor position
+    if (this.lastCursorPosition && this.canvasContent && this.canvasContent.nativeElement) {
+      // Focus the editor
+      this.canvasContent.nativeElement.focus();
+      
+      // Set selection to last cursor position
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(this.lastCursorPosition);
+        
+        // Delete the '{{' that triggered the dropdown
+        const range = selection.getRangeAt(0);
+        const preCaretRange = range.cloneRange();
+        preCaretRange.setStart(range.startContainer, Math.max(0, range.startOffset - 2));
+        preCaretRange.setEnd(range.endContainer, range.endOffset);
+        preCaretRange.deleteContents();
+        
+        // Create the field span element
+        const fieldSpan = document.createElement('span');
+        fieldSpan.classList.add('field-placeholder');
+        fieldSpan.setAttribute('data-field', fieldName);
+        fieldSpan.contentEditable = 'false';
+        fieldSpan.innerText = `{{${fieldName}}}`;
+        
+        // Insert the field
+        range.insertNode(fieldSpan);
+        
+        // Move cursor after the field
+        range.setStartAfter(fieldSpan);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    }
+    
+    // Close dropdown
+    this.closeFieldDropdown();
+    
+    this.notify(`Field ${fieldName} inserted`, 'success');
+    this.saveCurrentPageContent();
+  }
+  
+  closeFieldDropdown(): void {
+    this.showFieldDropdown = false;
   }
   
   // ===== HISTORY & UTILITY =====
@@ -2085,26 +2229,7 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
   
-  // ===== EXPORT AND NOTIFICATION =====
-  
-  updateExportDetails(): void {
-    switch(this.exportFormat) {
-      case 'html':
-        this.exportDetails = "HTML format exports the complete content as a web page with all formatting, styles, and images preserved.";
-        break;
-      case 'txt':
-        this.exportDetails = "Plain text format that preserves only the text content without formatting.";
-        break;
-      case 'pdf':
-        this.exportDetails = "PDF format for high-quality print documents that preserves all formatting, styles, and images exactly as they appear in the editor.";
-        break;
-    }
-  }
-  
-  downloadExport(): void {
-    this.notify('Export functionality will be implemented in future updates', 'warning');
-    this.showExportModal = false;
-  }
+  // ===== NOTIFICATION =====
   
   notify(message: string, type: 'success' | 'warning' | 'error'): void {
     this.notification = message;
@@ -2244,32 +2369,6 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     return tempDiv.innerHTML;
   }
 
-  fixObjectsForPrinting(container: HTMLElement, selector: string): void {
-    const elements = container.querySelectorAll(`.${selector}`);
-    
-    elements.forEach(element => {
-      const computedStyle = window.getComputedStyle(element as HTMLElement);
-      
-      // Handle position
-      if (computedStyle.position === 'relative') {
-        const left = parseInt(computedStyle.left || '0', 10);
-        const top = parseInt(computedStyle.top || '0', 10);
-        
-        if (left !== 0 || top !== 0) {
-          (element as HTMLElement).style.position = 'absolute';
-          (element as HTMLElement).style.left = `${left}px`;
-          (element as HTMLElement).style.top = `${top}px`;
-        }
-      }
-      
-      // Handle rotation
-      const transform = computedStyle.transform;
-      if (transform && transform !== 'none') {
-        (element as HTMLElement).style.transform = transform;
-      }
-    });
-  }
-
   // ===== KEYBOARD SHORTCUTS =====
   
   @HostListener('window:keydown', ['$event'])
@@ -2378,6 +2477,32 @@ export class AuroEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       this.notify('Please fill in all required fields', 'error');
     }
   }
+
+  fixObjectsForPrinting(container: HTMLElement, selector: string): void {
+  const elements = container.querySelectorAll(`.${selector}`);
+  
+  elements.forEach(element => {
+    const computedStyle = window.getComputedStyle(element as HTMLElement);
+    
+    // Handle position
+    if (computedStyle.position === 'relative') {
+      const left = parseInt(computedStyle.left || '0', 10);
+      const top = parseInt(computedStyle.top || '0', 10);
+      
+      if (left !== 0 || top !== 0) {
+        (element as HTMLElement).style.position = 'absolute';
+        (element as HTMLElement).style.left = `${left}px`;
+        (element as HTMLElement).style.top = `${top}px`;
+      }
+    }
+    
+    // Handle rotation
+    const transform = computedStyle.transform;
+    if (transform && transform !== 'none') {
+      (element as HTMLElement).style.transform = transform;
+    }
+  });
+}
   
   getAllPagesContent(): string {
     return this.pages.map(page => {

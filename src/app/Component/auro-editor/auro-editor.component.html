@@ -204,7 +204,7 @@
           </div>
         </div>
         
-        <!-- Undo/Redo & Export -->
+        <!-- Undo/Redo & Print -->
         <div class="toolbar-group">
           <button class="toolbar-btn" (click)="undo()" title="Undo (Ctrl+Z)">
             <i class="fas fa-undo"></i> Undo
@@ -214,9 +214,6 @@
           </button>
           <button class="toolbar-btn" (click)="printCanvas()" title="Print (Ctrl+P)">
             <i class="fas fa-print"></i> Print
-          </button>
-          <button class="toolbar-btn" (click)="showExportModal = true; updateExportDetails()" title="Export Document">
-            <i class="fas fa-file-export"></i> Export
           </button>
         </div>
       </div>
@@ -230,7 +227,7 @@
             </button>
             
             <div *ngIf="i === currentPageIndex" class="editor" [style.transform]="'scale(' + zoom/100 + ')'">
-              <div #canvasContent class="canvas-content" [attr.data-language]="currentLanguage" contenteditable="true"></div>
+              <div #canvasContent class="canvas-content" [attr.data-language]="currentLanguage" contenteditable="true" (input)="handleCanvasInput($event)"></div>
             </div>
             
             <div *ngIf="i !== currentPageIndex" class="editor page-preview" 
@@ -264,33 +261,22 @@
       </div>
     </div>
     
-    <!-- Export Modal -->
-    <div *ngIf="showExportModal" class="modal">
-      <div class="modal-backdrop" (click)="showExportModal = false"></div>
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Export Document</h3>
-          <button class="close-btn" (click)="showExportModal = false">&times;</button>
-        </div>
-        <div class="modal-body">
-          <div class="form-group">
-            <label>Export Format</label>
-            <select (change)="exportFormat = $any($event.target).value; updateExportDetails()">
-              <option value="html">HTML - Web Page</option>
-              <option value="txt">TXT - Plain Text</option>
-              <option value="pdf">PDF - Portable Document</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Details</label>
-            <div class="info-box">{{ exportDetails }}</div>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn secondary" (click)="showExportModal = false">Cancel</button>
-          <button class="btn primary" (click)="downloadExport()">Download</button>
-        </div>
-      </div>
+    <!-- Field Dropdown -->
+    <div *ngIf="showFieldDropdown" class="field-dropdown" [style.top]="fieldDropdownPosition.top" [style.left]="fieldDropdownPosition.left">
+      <select #fieldDropdownSelect (change)="insertFieldFromDropdown($event)" (blur)="closeFieldDropdown()">
+        <option value="">-- Select Field --</option>
+        <option value="name">Name</option>
+        <option value="age">Age</option>
+        <option value="eye">Eye</option>
+        <option value="gender">Gender</option>
+        <option value="uin">UIN</option>
+        <option value="diagnosis">Diagnosis</option>
+        <option value="procedure">Procedure</option>
+        <option value="implant">Implant</option>
+        <option value="doctor_name">Doctor Name</option>
+        <option value="mcir_no">MCIR No</option>
+        <option value="date">Date</option>
+      </select>
     </div>
     
     <!-- Image Modal -->
